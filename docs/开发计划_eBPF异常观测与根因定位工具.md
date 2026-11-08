@@ -106,7 +106,7 @@
 
 **任务清单**：
 
-- [ ] 装 openEuler 24.03 LTS：虚拟机（VirtualBox/VMware，分配 ≥8G 内存）或云主机（华为云/阿里云 openEuler 镜像，约 ¥30–100/月，性能数据更可信）
+- [ ] 装 openEuler 24.03 LTS：本机 Hyper-V 虚拟机（家庭版 Windows 用 VMware/VirtualBox 替代，分配 ≥8G 内存）或云主机（华为云/阿里云 openEuler 镜像，约 ¥30–100/月，性能数据更可信）
 - [ ] `dnf install -y bpftrace bcc-tools libbpf-devel clang llvm make git stress-ng fio sysstat kernel-devel`（个别包可能需要添加 EPOL 源）
 - [ ] **第 1 天建公开仓库**（Gitee/GitHub 均可，最终同步 educg GitLab 用 https 协议）
 - [ ] 玩 bpftrace 官网 one-liner tutorial 的 20 条命令（execsnoop、opensnoop、biosnoop、runqlat…）
@@ -115,7 +115,7 @@
 
 **验收标准**：① bpftrace 一行命令能看到实时事件；② minimal 示例有输出；③ 仓库已有 ≥10 次提交（过程性资料开始积累）。
 
-**常见坑**：虚拟机内存给少了（≥8G）；忘记 root/权限；内核头文件缺失装 `kernel-devel`；WSL2 不可用作主环境（BTF/CO-RE 支持不完整）。
+**常见坑**：虚拟机内存给少了（≥8G）；Hyper-V 第 2 代虚拟机没关安全启动（黑屏装不上系统）；忘记 root/权限；内核头文件缺失装 `kernel-devel`；WSL2 不可用作主环境（BTF/CO-RE 支持不完整）。
 
 ### 阶段 1 · 探针基础（11/16 – 11/29，2 周）
 
