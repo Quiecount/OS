@@ -1,0 +1,15 @@
+# Codely CLI 本地文件（不入库）
+.codely-cli/
+CODELY.md
+
+# 系统与 IDE 垃圾文件
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# 编译产物
+*.o
+*.d
+a.out
