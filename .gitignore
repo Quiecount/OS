@@ -1,5 +1,6 @@
 # Codely CLI 本地文件（不入库）
 .codely-cli/
+.codely/
 CODELY.md
 
 # 系统与 IDE 垃圾文件
