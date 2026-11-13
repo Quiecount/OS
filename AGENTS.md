@@ -154,4 +154,5 @@ git push gitlab main         # ② educg GitLab（比赛官方仓，提交记录
 
 - 2026-11-08：仓库建立；`docs/` 收录 4 份文档；分支 main / dev/mao / dev/yu；阶段 0（环境搭建）进行中，尚无代码
 - 2026-11-08：队名定为「太卡了先生」；README 按大赛提交要求改版（报名信息 + 项目名称 + 题目内容）
-- 2026-11-13：main 已推送至 educg GitLab（remote：`gitlab`，当前项目名 project3331747-425741）；**待办**：GitLab 网页改项目名为"系统工具-太卡了先生"并更新 remote 地址、README 回填高校/队伍ID/队员信息
+- 2026-11-13：main 已推送至 educg GitLab（remote：`gitlab`，当前项目名 project3331747-425741）；**待办**：GitLab 网页改项目名为"系统工具-太卡了先生"并更新 remote 地址
+- 2026-11-13：README 报名信息定稿——高校：杭州电子科技大学；队伍ID：T2026103369913109；按要求删除项目名称/选题方向/队员/指导教师行（标题即项目名称）
