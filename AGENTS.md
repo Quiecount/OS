@@ -93,16 +93,25 @@ git push                    # 已设好上游分支；若首次推送失败改�
 git push -u origin dev/mao
 ```
 
-### 4.5 合并到 main（仅 owner 执行）
+### 4.5 合并到 main（仅 owner 执行；main 必须双推）
 
 ```bash
 git checkout main
 git pull
 git merge dev/mao
-git push
 git merge dev/yu
-git push
+git push origin main         # ① GitHub（开发主仓）
+git push gitlab main         # ② educg GitLab（比赛官方仓，提交记录 = 过程性资料）
 ```
+
+**两个远程的分工**：
+
+| remote 名 | 指向 | 用途 |
+|---|---|---|
+| `origin` | https://github.com/Quiecount/OS.git | 开发主仓：日常开发、分支、协作 |
+| `gitlab` | https://gitlab.eduxiji.net/T2026103369913109/project3331747-425741.git | **比赛官方提交仓**：main 每次更新都要同步推过去 |
+
+> 注：GitLab 项目在网页上改名为"系统工具-太卡了先生"后，其 URL 会变化，owner 需执行 `git remote set-url gitlab <新地址>` 更新。
 
 ## 5. 提交信息规范
 
@@ -145,3 +154,4 @@ git push
 
 - 2026-11-08：仓库建立；`docs/` 收录 4 份文档；分支 main / dev/mao / dev/yu；阶段 0（环境搭建）进行中，尚无代码
 - 2026-11-08：队名定为「太卡了先生」；README 按大赛提交要求改版（报名信息 + 项目名称 + 题目内容）
+- 2026-11-13：main 已推送至 educg GitLab（remote：`gitlab`，当前项目名 project3331747-425741）；**待办**：GitLab 网页改项目名为"系统工具-太卡了先生"并更新 remote 地址、README 回填高校/队伍ID/队员信息
