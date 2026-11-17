@@ -13,3 +13,9 @@ Thumbs.db
 *.o
 *.d
 a.out
+build/
+output/
+*.jsonl
+
+# 本地生成的内核类型定义
+vmlinux.h
