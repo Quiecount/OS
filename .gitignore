@@ -14,3 +14,4 @@ Thumbs.db
 *.o
 *.d
 a.out
+/src/.output/
