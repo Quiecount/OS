@@ -2,6 +2,7 @@
 
 > 全国大学生计算机系统能力大赛 · 操作系统设计赛（华东区域赛）· 操作系统应用开发赛道参赛项目
 > 运行环境：openEuler 24.03 LTS（内核 6.6） · 工作代号：osmedic
+> 正式提交截止：2026-12-24
 
 一个轻量级、高实时性的系统异常观测与诊断工具：用 **eBPF** 在内核侧实时采集 5 类典型异常的现场数据，用**规则引擎**推断疑似根因并组装证据链，输出**结构化 JSON 诊断报告**，并由 **LLM** 生成人类可读的诊断建议。
 
@@ -53,8 +54,8 @@ test.sh             # （开发中）一键测试（PASS/FAIL 判定）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 0 | 环境搭建 + 第一支探针 | :construction: 进行中 |
-| 1 | libbpf 探针基础 | :hourglass: 待开始 |
+| 0 | 环境搭建 + 第一支探针 | :white_check_mark: 已完成 |
+| 1 | libbpf 探针基础 | :white_check_mark: 已完成 |
 | 2 | 五场景逐个攻坚 | :hourglass: 待开始 |
 | 3 | 诊断引擎 + 结构化输出 | :hourglass: 待开始 |
 | 4 | LLM 报告层 | :hourglass: 待开始 |
@@ -72,6 +73,23 @@ test.sh             # （开发中）一键测试（PASS/FAIL 判定）
 ```bash
 bpftrace -e 'tracepoint:syscalls:sys_enter_openat { printf("%s %s\n", comm, str(args->filename)); }'
 ```
+
+## 阶段1快速开始
+
+```bash
+make check
+sudo bash scripts/stage1-smoke.sh
+```
+
+阶段1已提供：
+
+- `build/execsnoop`：execve ring buffer 事件采集与 JSONL 落盘
+- `build/biolatency`：按块设备输出 I/O 延迟直方图 JSONL
+- `scripts/stage1-smoke.sh`：构建、注入负载、JSON 校验的一键验收
+
+2026-11-17 已在 openEuler 24.03 LTS 虚拟机完成端到端验收：`EXEC_EVENTS=2`、`IO_HISTOGRAMS=1`、`STAGE1_SMOKE_OK`。
+
+实现说明与限制见 [docs/阶段1_探针基础实现与验收.md](docs/阶段1_探针基础实现与验收.md)。AI 辅助开发披露见 [docs/AI工具使用说明.md](docs/AI工具使用说明.md)。
 
 ## 演示视频
 
