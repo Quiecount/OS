@@ -7,11 +7,12 @@ LIBBPF_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libbpf)
 LIBBPF_LIBS ?= $(shell $(PKG_CONFIG) --libs libbpf)
 CFLAGS ?= -g -O2 -Wall -Wextra
 VMLINUX_BTF ?= /sys/kernel/btf/vmlinux
-APPS := minimal
+APPS := minimal exec_trace
 
 .PHONY: all $(APPS) clean
 all: $(APPS)
 minimal: $(OUTPUT)/minimal
+exec_trace: $(OUTPUT)/exec_trace
 
 $(OUTPUT):
 	mkdir -p $@
@@ -19,6 +20,7 @@ $(OUTPUT):
 $(OUTPUT)/vmlinux.h: $(VMLINUX_BTF) | $(OUTPUT)
 	$(BPFTOOL) btf dump file $< format c > $@
 
+$(OUTPUT)/exec_trace.bpf.o: probes/exec_trace.h $(OUTPUT)/vmlinux.h
 
 $(OUTPUT)/%.bpf.o: probes/%.bpf.c | $(OUTPUT)
 	$(CLANG) -g -O2 -target bpf $(LIBBPF_CFLAGS) -I$(OUTPUT) -Iprobes -c $< -o $@
@@ -26,6 +28,7 @@ $(OUTPUT)/%.bpf.o: probes/%.bpf.c | $(OUTPUT)
 $(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
+$(OUTPUT)/exec_trace: probes/exec_trace.h
 
 $(OUTPUT)/%: loader/%.c $(OUTPUT)/%.skel.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBBPF_CFLAGS) -I$(OUTPUT) -Iprobes $< $(LDFLAGS) $(LIBBPF_LIBS) -o $@
