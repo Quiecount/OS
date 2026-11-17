@@ -70,8 +70,8 @@ test.sh             # （开发中）一键测试（PASS/FAIL 判定）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 0 | 环境搭建 + 第一支探针 | :construction: 进行中 |
-| 1 | libbpf 探针基础 | :hourglass: 待开始 |
+| 0 | 环境搭建 + 第一支探针 | yu 的 minimal 已验收；其余环境清单待逐项确认 |
+| 1 | libbpf 探针基础 | :construction: exec/ringbuf 与 IO/map/JSON Lines 已验证，待全员独立复现 |
 | 2 | 五场景逐个攻坚 | :hourglass: 待开始 |
 | 3 | 诊断引擎 + 结构化输出 | :hourglass: 待开始 |
 | 4 | LLM 报告层 | :hourglass: 待开始 |
@@ -89,6 +89,33 @@ test.sh             # （开发中）一键测试（PASS/FAIL 判定）
 ```bash
 bpftrace -e 'tracepoint:syscalls:sys_enter_openat { printf("%s %s\n", comm, str(args->filename)); }'
 ```
+
+已将阶段 0 的 libbpf-bootstrap minimal 学习示例整理到 `src/probes/` 和
+`src/loader/`，构建入口为 `make -C src`。依赖安装、运行与代码来源见
+[ebpf-learning 迁入说明](docs/ebpf-learning迁入说明.md)。
+
+阶段 1 已实现成功 exec 事件采集：
+
+```bash
+# 构建依赖同迁入说明；产物位于 src/.output/。
+make -C src exec_trace
+sudo ./src/.output/exec_trace -o /tmp/osmedic-exec.jsonl
+# 在另一终端执行 /usr/bin/true 等程序；Ctrl+C 停止采集。
+```
+
+用法、事件字段、权限要求与验证记录见
+[阶段 1：进程启动事件与 JSON Lines](docs/阶段1_exec追踪与JSONL.md)。
+
+阶段 1 的块设备 IO 延迟直方图也已实现：
+
+```bash
+make -C src io_latency
+# 每秒输出读、写累计直方图，共输出 5 组快照。
+sudo ./src/.output/io_latency -i 1 -n 5 -o /tmp/osmedic-io.jsonl
+```
+
+设备过滤、直方图含义与真实 IO 验证见
+[阶段 1：块设备 IO 延迟直方图](docs/阶段1_IO延迟直方图.md)。
 
 ## 演示视频
 

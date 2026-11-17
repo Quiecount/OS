@@ -110,7 +110,7 @@
 - [ ] `dnf install -y bpftrace bcc-tools libbpf-devel clang llvm make git stress-ng fio sysstat kernel-devel`（个别包可能需要添加 EPOL 源）
 - [ ] **第 1 天建公开仓库**（Gitee/GitHub 均可，最终同步 educg GitLab 用 https 协议）
 - [ ] 玩 bpftrace 官网 one-liner tutorial 的 20 条命令（execsnoop、opensnoop、biosnoop、runqlat…）
-- [ ] 克隆 `anakryiko/libbpf-bootstrap`，跑通 minimal 示例（追踪 execve）
+- [ ] 克隆 `libbpf/libbpf-bootstrap`，跑通 minimal 示例（追踪加载器自身的 write；成功 exec 追踪在阶段 1 实现）
 - [ ] 确认报名：大赛平台报名、队伍信息、指导老师
 
 **验收标准**：① bpftrace 一行命令能看到实时事件；② minimal 示例有输出；③ 仓库已有 ≥10 次提交（过程性资料开始积累）。
@@ -123,10 +123,14 @@
 
 **任务清单**：
 
-- [ ] 把 minimal 示例改造成自写探针①：execve 追踪（进程启动事件 → ringbuf）
-- [ ] 自写探针②：块设备 IO 延迟直方图（issue→complete 计时，map 存直方图）
-- [ ] 用户态程序从 map 读数据，落盘成 JSON Lines 文件
+- [x] 把 minimal 示例改造成自写探针①：execve 追踪（进程启动事件 → ringbuf；2026-11-18，yu 分支实现成功 exec → JSON Lines，见[验收记录](阶段1_exec追踪与JSONL.md)）
+- [x] 自写探针②：块设备 IO 延迟直方图（issue→complete 计时，map 存直方图；2026-11-18，见[验收记录](阶段1_IO延迟直方图.md)）
+- [x] 用户态程序从 map 读数据，落盘成 JSON Lines 文件（2026-11-18，IO per-CPU map 累计快照已验证）
 - [ ] 每人独立复现一次（不看教程），能读懂 Verifier 的拒绝原因
+
+2026-11-18 进度：进程启动事件、块 IO 延迟直方图、map 读取与 JSON Lines 落盘
+均已通过本机集成验证；每位成员的独立复现与 Verifier 拒绝原因学习仍待完成。
+`AGENTS.md` 的“当前阶段 0 / 尚无代码”为历史状态，需 owner 根据本记录同步更新。
 
 **验收标准**：任一成员能独立"从零写一个带 ringbuf 的探针 + 落盘 JSON"。做到这一步，**eBPF 这道墙就翻过去了**。
 
