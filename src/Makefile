@@ -9,7 +9,7 @@ CFLAGS ?= -g -O2 -Wall -Wextra
 VMLINUX_BTF ?= /sys/kernel/btf/vmlinux
 APPS := minimal exec_trace io_latency
 
-.PHONY: all $(APPS) clean
+.PHONY: all $(APPS) clean check-io-math
 all: $(APPS)
 minimal: $(OUTPUT)/minimal
 exec_trace: $(OUTPUT)/exec_trace
@@ -36,8 +36,14 @@ $(OUTPUT)/io_latency: probes/io_latency.h
 $(OUTPUT)/%: loader/%.c $(OUTPUT)/%.skel.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBBPF_CFLAGS) -I$(OUTPUT) -Iprobes $< $(LDFLAGS) $(LIBBPF_LIBS) -o $@
 
+$(OUTPUT)/test_io_latency_math: ../tests/test_io_latency_math.c probes/io_latency.h | $(OUTPUT)
+	$(CC) $(CPPFLAGS) -std=c11 -O2 -Wall -Wextra -Werror -Iprobes $< -o $@
+
+check-io-math: $(OUTPUT)/test_io_latency_math
+	./$(OUTPUT)/test_io_latency_math
+
 clean:
-	$(RM) $(addprefix $(OUTPUT)/,$(APPS) $(addsuffix .bpf.o,$(APPS)) $(addsuffix .skel.h,$(APPS))) $(OUTPUT)/vmlinux.h
+	$(RM) $(addprefix $(OUTPUT)/,$(APPS) $(addsuffix .bpf.o,$(APPS)) $(addsuffix .skel.h,$(APPS))) $(OUTPUT)/vmlinux.h $(OUTPUT)/test_io_latency_math
 
 .DELETE_ON_ERROR:
 .SECONDARY:
