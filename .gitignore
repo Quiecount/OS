@@ -10,7 +10,9 @@ Thumbs.db
 .vscode/
 .idea/
 
-# 编译产物
+# 编译产物与自动生成文件
 *.o
 *.d
 a.out
+build/
+src/vmlinux.h

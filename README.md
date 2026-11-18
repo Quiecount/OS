@@ -55,8 +55,9 @@ AGENTS.md           # 仓库协作规范（团队成员与 AI 编程助手必读
 docs/
 ├── 华东区域赛应用开发赛道选题分析.md    # 选题调研：历届作品盘点与选题决策
 ├── 开发计划_eBPF异常观测与根因定位工具.md # 8.5 周分阶段开发计划（含验收标准/砍单指南）
+├── 开发指南_第一支探针execsnoop.md      # 探针① execsnoop：原理走读 + 构建运行 + 排错
 └── 团队开发环境搭建指南.md              # 开发环境：各自本机 Hyper-V 虚拟机为主，云虚拟机备选
-src/                # （开发中）eBPF 探针（src/probes/）与用户态加载器（src/loader/）
+src/                # eBPF 探针（probes/）与加载器（loader/）——探针① execsnoop 已就绪
 analysis/           # （开发中）聚合、基线与规则诊断引擎
 report/             # （开发中）LLM 报告层（带 --no-llm 降级开关）
 faults/             # （开发中）5 类异常场景故障注入脚本/程序
