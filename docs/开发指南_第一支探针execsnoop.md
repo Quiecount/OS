@@ -78,6 +78,21 @@ ls /sys/kernel/btf/vmlinux           # 内核带 BTF（openEuler 24.03 一定有
 
 ## 五、构建与运行（以后的日常循环）
 
+### 第 0 步：第一次先把仓库克隆进 VM（只需一次）
+
+虚拟机和 Windows 是两套独立系统，代码不会自动出现在 VM 里——先从比赛仓库克隆一份：
+
+```bash
+cd ~
+git clone https://gitlab.eduxiji.net/T2026103369913109/project3331747-425741.git OS
+# 登录：用户名 T2026103369913109，密码 = educg 平台密码
+cd OS
+```
+
+（以后更新代码只需在此目录 `git pull`。）
+
+### 编译与运行
+
 ```bash
 cd ~/OS            # 仓库根目录（按你 VM 里的实际路径）
 make               # 编译；第一次会自动生成 vmlinux.h，稍慢属正常
