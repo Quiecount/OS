@@ -21,14 +21,14 @@
 ## 2. 仓库结构与文件归置规则
 
 ```
-docs/          # 项目文档：选题分析 / 开发计划 / 团队环境指南 / 各阶段开发指南
-src/           # eBPF 探针（probes/*.bpf.c）+ 用户态加载器（loader/）+ 共享 event.h；vmlinux.h 由 make 自动生成、不入库
-analysis/      # （规划中）Python：聚合、基线、规则诊断引擎
-report/        # （规划中）Python：LLM 报告层（必须带 --no-llm 降级开关）
-faults/        # （规划中）5 类异常场景的故障注入脚本/程序
-tests/         # （规划中）自动化测试、场景回放、PASS/FAIL 判分脚本
-deploy.sh      # （规划中）一键部署
-test.sh        # （规划中）一键测试
+docs/          # 项目文档：选题分析 / 开发计划 / 系统设计 / 环境指南 / 各阶段开发指南
+src/           # 探针（probes/：execsnoop 完整 + 5 场景骨架）+ 加载器（loader/）+ 事件契约（events.h）；vmlinux.h 由 make 自动生成、不入库
+analysis/      # Python：聚合、基线、规则诊断引擎（骨架 collector.py，阶段 3 完成规则引擎）
+report/        # Python：LLM 报告层（阶段 4 建，必须带 --no-llm 降级开关）
+faults/        # 五场景故障注入：01-05 脚本 + syscall_bomb.c / lock_contention.c
+tests/         # test.sh 一键回归（阶段 3 接入自动判定）
+deploy.sh      # 一键部署（装依赖 + make）
+test.sh        # 一键测试入口（转调 tests/test.sh）
 ```
 
 **归置规则（AI 生成代码时必须遵守）**：
@@ -158,3 +158,4 @@ git push origin main         # 尽力推：GitHub 镜像；网络不通就跳过
 - 2026-11-13：main 已推送至 educg GitLab（remote：`gitlab`，当前项目名 project3331747-425741）；**待办**：GitLab 网页改项目名为"系统工具-太卡了先生"并更新 remote 地址
 - 2026-11-13：README 报名信息定稿——高校：杭州电子科技大学；队伍ID：T2026103369913109；按要求删除项目名称/选题方向/队员/指导教师行（标题即项目名称）
 - 2026-11-13：第一支探针 execsnoop 完成——src/probes + src/loader + src/event.h + Makefile + docs/开发指南；VM 内构建 = 仓库根目录 `make`（自动生成 src/vmlinux.h），运行 = `sudo ./build/execsnoop`；GitHub 同步暂缓（网络不稳），main 只推 gitlab
+- 2026-11-18：五场景总体框架落地——src/events.h 统一事件契约（execsnoop 已重构接入，旧 event.h 删除）；5 个场景探针骨架（syscall/cpu/io/mem/lock，可编译、指标 TODO 见各文件与系统设计文档 §四）；faults 注入全套（01-05 脚本 + syscall_bomb + lock_contention）；analysis/collector.py、deploy.sh、test.sh 骨架；总体设计见 docs/系统设计_五场景总体框架.md。**GitLab 推送暂停中（用户要求本地攒批，等指令恢复）**

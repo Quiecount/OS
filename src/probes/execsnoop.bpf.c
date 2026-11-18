@@ -12,7 +12,7 @@
 // 许可证声明：tracepoint 类程序要求 GPL 兼容许可证
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-#include "event.h"
+#include "events.h"
 
 // 事件队列：BPF 环形缓冲区（内核态写、用户态读）
 // 256KB 足够吸收事件洪峰；ringbuf 需要 5.8+ 内核，openEuler 24.03（6.6）满足
@@ -26,12 +26,12 @@ struct {
 SEC("tracepoint/syscalls/sys_enter_execve")
 int trace_execve(struct trace_event_raw_sys_enter *ctx)
 {
-    struct event e = {};   // 必须清零！读未初始化内存会被 Verifier 直接拒绝
+    struct ev_exec e = {};  // 必须清零！读未初始化内存会被 Verifier 直接拒绝
 
-    // 三个内核预注册的 helper：取当前进程的 pid / uid / 进程名
-    e.pid = bpf_get_current_pid_tgid() >> 32;      // 返回值高 32 位是 pid
-    e.uid = bpf_get_current_uid_gid();             // 返回值低 32 位是 uid
-    bpf_get_current_comm(&e.comm, sizeof(e.comm));
+    // 三个内核预注册的 helper：取当前进程的 pid / uid / 进程名（统一放 ev_common 头）
+    e.c.pid = bpf_get_current_pid_tgid() >> 32;    // 返回值高 32 位是 pid
+    e.c.uid = bpf_get_current_uid_gid();           // 返回值低 32 位是 uid
+    bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
 
     // execve 的第一个参数（args[0]）是文件名指针，位于用户态地址空间
     // 用户态指针绝不能直接解引用（会被 Verifier 拒绝），必须用 helper 安全拷贝

@@ -55,15 +55,16 @@ AGENTS.md           # 仓库协作规范（团队成员与 AI 编程助手必读
 docs/
 ├── 华东区域赛应用开发赛道选题分析.md    # 选题调研：历届作品盘点与选题决策
 ├── 开发计划_eBPF异常观测与根因定位工具.md # 8.5 周分阶段开发计划（含验收标准/砍单指南）
+├── 系统设计_五场景总体框架.md           # 总体架构：五层流水线 / 事件契约 / 场景填肉清单
 ├── 开发指南_第一支探针execsnoop.md      # 探针① execsnoop：原理走读 + 构建运行 + 排错
 └── 团队开发环境搭建指南.md              # 开发环境：各自本机 Hyper-V 虚拟机为主，云虚拟机备选
-src/                # eBPF 探针（probes/）与加载器（loader/）——探针① execsnoop 已就绪
-analysis/           # （开发中）聚合、基线与规则诊断引擎
-report/             # （开发中）LLM 报告层（带 --no-llm 降级开关）
-faults/             # （开发中）5 类异常场景故障注入脚本/程序
-tests/              # （开发中）自动化测试与场景回放
-deploy.sh           # （开发中）一键部署
-test.sh             # （开发中）一键测试（PASS/FAIL 判定）
+src/                # 探针（probes/ 6 个：execsnoop 完整 + 5 场景骨架）/ 加载器 / 事件契约 events.h
+analysis/           # 聚合与规则引擎（骨架：collector.py，阶段 3 完成规则）
+report/             # LLM 报告层（阶段 4 建，带 --no-llm 降级开关）
+faults/             # 五场景故障注入（01-05 脚本 + syscall_bomb / lock_contention 程序）
+tests/              # 一键回归测试（骨架：test.sh，阶段 3 接入自动判定）
+deploy.sh           # 一键部署（依赖安装 + 编译）
+test.sh             # 一键测试入口（转调 tests/test.sh）
 ```
 
 ## 开发计划

@@ -6,7 +6,7 @@
 #include <errno.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
-#include "event.h"
+#include "events.h"
 
 static volatile sig_atomic_t exiting = 0;  // Ctrl+C 退出标志
 
@@ -15,8 +15,8 @@ static void on_sigint(int sig) { exiting = 1; }
 // ringbuf 回调：每收到一个事件，内核数据被拷贝到 data 指向这里
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
-    const struct event *e = data;
-    printf("%-8u %-8u %-16.16s %s\n", e->pid, e->uid, e->comm, e->filename);
+    const struct ev_exec *e = data;
+    printf("%-8u %-8u %-16.16s %s\n", e->c.pid, e->c.uid, e->c.comm, e->filename);
     return 0;
 }
 
