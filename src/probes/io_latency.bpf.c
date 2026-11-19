@@ -1,108 +1,32 @@
-// SPDX-License-Identifier: GPL-2.0
+// 探针（场景3 骨架）：I/O 延迟 —— 观测块设备请求下发
+// 挂载点：tracepoint/block/block_rq_issue（请求提交给设备驱动时触发）
+// 骨架现状：只提交事件（delta_ns=0）；阶段 2 需再挂 block_rq_complete，
+//           用 hash map 配对 issue/complete 计算每次 I/O 的真实延迟
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
-#include <bpf/bpf_core_read.h>
-#include <bpf/bpf_tracing.h>
-#include "io_latency.h"
 
-char LICENSE[] SEC("license") = "GPL";
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-const volatile bool filter_device = false;
-const volatile __u32 target_major = 0;
-const volatile __u32 target_minor = 0;
-__u64 tracking_failures = 0;
-__u64 partial_completions = 0;
-__u64 requeued_requests = 0;
+#include "events.h"
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 32768);
-	__type(key, __u64);
-	__type(value, struct io_start);
-} starts SEC(".maps");
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} events SEC(".maps");
 
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__uint(max_entries, IO_LATENCY_OPERATIONS);
-	__type(key, __u32);
-	__type(value, struct io_histogram);
-} histograms SEC(".maps");
-
-/* tp_btf 使用同名 block tracepoint 的原始参数，获取稳定的请求指针。 */
-SEC("tp_btf/block_rq_issue")
-int BPF_PROG(record_issue, struct request *rq)
+// 骨架阶段 ctx 字段不访问（block tracepoint 的结构名随内核版本有差异，
+// 阶段 2 动工前先在目标内核上 `bpftrace -l 'tracepoint:block:*'` 实测确认）
+SEC("tracepoint/block/block_rq_issue")
+int trace_block_issue(void *ctx)
 {
-	__u64 key = (__u64)rq;
-	struct io_start start = {};
-	struct gendisk *disk;
-	__u32 major, minor;
+    struct ev_io e = {};
 
-	/* Linux 6.6 的 REQ_OP_BITS 为 8；其余位为请求标志。 */
-	start.operation = BPF_CORE_READ(rq, cmd_flags) & 0xff;
-	if (start.operation != REQ_OP_READ && start.operation != REQ_OP_WRITE)
-		return 0;
-	start.bytes = BPF_CORE_READ(rq, __data_len);
-	if (!start.bytes)
-		return 0;
-	if (filter_device) {
-		disk = BPF_CORE_READ(rq, q, disk);
-		if (!disk)
-			return 0;
-		major = BPF_CORE_READ(disk, major);
-		minor = BPF_CORE_READ(disk, first_minor);
-		if (major != target_major || minor != target_minor)
-			return 0;
-	}
-	start.timestamp_ns = bpf_ktime_get_ns();
-	if (bpf_map_update_elem(&starts, &key, &start, BPF_ANY))
-		__sync_fetch_and_add(&tracking_failures, 1);
-	return 0;
-}
+    e.c.ts_ns = bpf_ktime_get_ns();                 // issue 时刻 = 延迟起点
+    e.c.pid = bpf_get_current_pid_tgid() >> 32;
+    e.c.uid = bpf_get_current_uid_gid();
+    bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
+    e.delta_ns = 0;                                 // TODO(阶段2)：配对后填真实延迟
 
-SEC("tp_btf/block_rq_complete")
-int BPF_PROG(record_complete, struct request *rq, blk_status_t error, unsigned int nr_bytes)
-{
-	__u64 key = (__u64)rq;
-	struct io_start *start, sample;
-	struct io_histogram *histogram;
-	__u64 latency;
-	__u32 remaining, slot, operation;
-
-	start = bpf_map_lookup_elem(&starts, &key);
-	if (!start)
-		return 0;
-	if (error)
-		start->had_error = 1;
-	remaining = BPF_CORE_READ(rq, __data_len);
-	if (!io_completion_is_final(nr_bytes, remaining, BPF_CORE_READ(rq, bio) != NULL)) {
-		__sync_fetch_and_add(&partial_completions, 1);
-		return 0;
-	}
-	sample = *start;
-	bpf_map_delete_elem(&starts, &key);
-	operation = sample.operation;
-	histogram = bpf_map_lookup_elem(&histograms, &operation);
-	if (!histogram)
-		return 0;
-	latency = bpf_ktime_get_ns() - sample.timestamp_ns;
-	slot = io_latency_slot(latency);
-	__sync_fetch_and_add(&histogram->slots[slot], 1);
-	__sync_fetch_and_add(&histogram->bytes, sample.bytes);
-	__sync_fetch_and_add(&histogram->latency_total_ns, latency);
-	if (sample.had_error)
-		__sync_fetch_and_add(&histogram->errors, 1);
-	return 0;
-}
-
-/* 重入队后删除旧计时，下一次 issue 会开启新的下发尝试。 */
-SEC("tp_btf/block_rq_requeue")
-int BPF_PROG(record_requeue, struct request *rq)
-{
-	__u64 key = (__u64)rq;
-
-	if (bpf_map_lookup_elem(&starts, &key)) {
-		bpf_map_delete_elem(&starts, &key);
-		__sync_fetch_and_add(&requeued_requests, 1);
-	}
-	return 0;
+    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    return 0;
 }

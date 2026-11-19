@@ -9,7 +9,7 @@
 
 | 文件 | 用途 |
 |---|---|
-| `src/probes/io_latency.bpf.c` | 关联请求、记录完成延迟、处理部分完成和重入队 |
+| `src/probes/io_latency_learning.bpf.c` | 关联请求、记录完成延迟、处理部分完成和重入队 |
 | `src/probes/io_latency.h` | 共享 map 结构、直方图桶及完成判定 |
 | `src/loader/io_latency.c` | 设备过滤参数、周期读取 map、JSON Lines 与资源回收 |
 | `tests/test_io_latency_math.c` | 桶边界、饱和及部分完成判定测试，无需 BPF 权限 |
@@ -156,3 +156,10 @@ sudo python3 tests/test_io_latency.py
 阶段 1 的两条代码链路现已具备：exec → ringbuf → JSON Lines，以及
 IO issue/complete → map → JSON Lines。队员独立复现与 Verifier 学习验收后，
 下一步按阶段 2 的顺序实现 syscall 热点场景。
+
+## GitLab 框架同步（2026-11-19）
+
+为保留双方实现，学习版探针源文件迁为 `io_latency_learning.bpf.c`，
+`make -C src io_latency` 和加载器路径保持不变。
+`src/probes/io_latency.bpf.c` 保留 GitLab 场景 3 框架，使用冻结的 `src/events.h`。
+学习版累计 map 快照用于阶段 1 验证；阶段 2 的输出以 `docs/接口契约.md` 为准。

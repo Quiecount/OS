@@ -22,7 +22,9 @@ $(OUTPUT)/vmlinux.h: $(VMLINUX_BTF) | $(OUTPUT)
 	$(BPFTOOL) btf dump file $< format c > $@
 
 $(OUTPUT)/exec_trace.bpf.o: probes/exec_trace.h $(OUTPUT)/vmlinux.h
-$(OUTPUT)/io_latency.bpf.o: probes/io_latency.h $(OUTPUT)/vmlinux.h
+# 保留阶段 1 学习版；场景 3 的同名框架探针由根目录 Makefile 构建。
+$(OUTPUT)/io_latency.bpf.o: probes/io_latency_learning.bpf.c probes/io_latency.h $(OUTPUT)/vmlinux.h | $(OUTPUT)
+	$(CLANG) -g -O2 -target bpf $(LIBBPF_CFLAGS) -I$(OUTPUT) -Iprobes -c $< -o $@
 
 $(OUTPUT)/%.bpf.o: probes/%.bpf.c | $(OUTPUT)
 	$(CLANG) -g -O2 -target bpf $(LIBBPF_CFLAGS) -I$(OUTPUT) -Iprobes -c $< -o $@
