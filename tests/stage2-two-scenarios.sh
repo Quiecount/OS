@@ -59,6 +59,9 @@ hog = [r for r in cpu_rows if r.get('type') == 'CPU_HOG'
 delay = [r for r in delay_rows if r.get('type') == 'SCHED_DELAY']
 assert hot, 'FAIL: 未检出 syscall bomb 热点'
 assert hog, 'FAIL: 未检出持续 10 秒的 CPU_HOG'
+worker_cpu = [r['cpu_percent_one_core'] for r in cpu_rows
+              if r.get('event') == 'cpu_metric' and r.get('comm') == 'stress-ng-cpu']
+assert worker_cpu and max(worker_cpu) <= 105, 'FAIL: 单线程 CPU 窗口出现跨窗口累计尖峰'
 assert delay, 'FAIL: 未检出超额 CPU 负载下的 SCHED_DELAY'
 assert any(r.get('event') == 'scheduler_metric' for r in cpu_rows)
 for name, expected in [('syscall-report.json', 'SYSCALL_HOTSPOT'),

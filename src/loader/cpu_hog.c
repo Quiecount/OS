@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include <errno.h>
 #include <getopt.h>
 #include <stdint.h>
@@ -20,6 +20,8 @@ struct row {
     unsigned int pid;
     struct cpu_stats stats;
 };
+
+#include "proc_cpu.h"
 
 struct streak {
     unsigned int pid;
@@ -62,7 +64,7 @@ static void emit_cpu_hog(FILE *out, const struct row *r, double cpu_pct,
     monitor_json_string(out, r->stats.comm);
     fprintf(out, "}],\"key_metrics\":{\"cpu_percent\":%.2f,\"pid\":%u,\"duration_over_80_percent_s\":%.2f},",
             cpu_pct, r->pid, streak);
-    fputs("\"suspected_root_cause\":\"进程持续占用超过单核容量的 80%\",\"evidence_chain\":[\"sched_switch 运行时间累计计算的 CPU 占用超过 80%\",\"持续时间达到 10 秒\"],\"recommendation\":[\"检查热点线程和计算循环\"]}\n", out);
+    fputs("\"suspected_root_cause\":\"进程持续占用超过单核容量的 80%\",\"evidence_chain\":[\"/proc 累计 CPU 时间的窗口差值超过单核 80%\",\"持续时间达到 10 秒\"],\"recommendation\":[\"检查热点线程和计算循环\"]}\n", out);
 }
 
 static void emit_sched_delay(FILE *out, unsigned long long p99,
@@ -109,6 +111,7 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
             ++n;
         } else if (errno != ENOENT) goto fail;
     }
+    if (sample_process_cpu(rows, &n)) goto fail;
     qsort(rows, n, sizeof(*rows), by_runtime_desc);
     for (size_t i = 0; i < n; ++i) {
         struct row *r = &rows[i];
@@ -227,6 +230,12 @@ int main(int argc, char **argv)
     fprintf(stderr, "cpu_hog 已启动；每 %u 秒汇总，runqlat P99 基线 %u us。\n",
             interval, baseline);
     begin = last = monitor_now_ns(CLOCK_MONOTONIC);
+    struct row *initial = calloc(MAX_ROWS, sizeof(*initial));
+    size_t initial_count = 0;
+    if (!initial) goto done;
+    int sampled = sample_process_cpu(initial, &initial_count);
+    free(initial);
+    if (sampled) goto done;
     monitor_timestamp(start, sizeof(start));
     while (!monitor_stop) {
         uint64_t now;

@@ -35,7 +35,7 @@ $(BUILD)/%.bpf.o: src/probes/%.bpf.c src/events.h src/vmlinux.h src/common/osmed
 $(BUILD)/%.skel.h: $(BUILD)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
-$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h
+$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h src/common/proc_cpu.h
 	$(CC) $(USER_CFLAGS) -I$(BUILD) -Isrc -Isrc/common $< -o $@ $(USER_LIBS)
 
 # 探针① 的用户态加载器（其余场景加载器按此模板在阶段 2 补齐）
