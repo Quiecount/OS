@@ -9,11 +9,11 @@
 | 日期 | 工具与模型 | 使用场景 | 产出 | 人工验证 |
 |---|---|---|---|---|
 | 2026-11-17 | OpenAI Codex | 阶段1架构设计、libbpf CO-RE 探针与加载器代码生成、构建脚本、验收脚本、文档整理 | `execsnoop`、`biolatency`、Makefile、阶段1验收与说明文档 | 已在 openEuler 24.03 LTS 虚拟机使用 clang/libbpf 完成严格告警编译、ELF/BTF 检查和 root 端到端 smoke test；捕获 2 条 exec 事件和 67 个块 I/O 样本，结果为 `STAGE1_SMOKE_OK`；参赛成员还需完成代码走读与独立复现 |
-| 2026-11-19 | OpenAI Codex | 场景 1–2 eBPF 探针、加载器、故障注入、collector 对接、验收与性能评测脚本及文档 | `syscall_hotspot`、`cpu_hog`、`faults/syscall_bomb.c`、`tests/stage2-two-scenarios.sh` | 已在 openEuler 24.03 LTS 虚拟机完成合入主线框架后的 `make check` 编译；root 端到端和性能评测尚待执行。参赛成员需走读并独立复现。 |
+| 2026-11-19 | OpenAI Codex | 场景 1–2 eBPF 探针、加载器、故障注入、collector 对接、验收与性能评测脚本及文档 | `syscall_hotspot`、`cpu_hog`、`faults/syscall_bomb.c`、`tests/stage2-two-scenarios.sh` | 已在 openEuler 24.03 LTS 完成 `make check` 和 root 端到端验收，检出三种异常（3/3）。三轮开关探针对照中 syscall 吞吐下降 21.58%，CPU 压测吞吐下降 0.74%；syscall 性能未达到项目自定目标。参赛成员需走读并独立复现。 |
 
 ## 3 交互摘要
 
-参赛队向 AI 提供的任务是：阅读已下载的 2026 年华东区域赛章程、技术方案和提交要求，在现有 openEuler 项目中完成开发计划的阶段1。AI 根据仓库中的阶段目标实现两支基础探针，并通过本地 openEuler 虚拟机验证构建与运行结果。
+参赛队先向 AI 提供阶段 1 的环境与基础探针任务，随后要求在现有 openEuler 框架中实现系统调用热点和 CPU 占用/调度延迟两个场景，并查询性能评价依据。AI 根据仓库文档实现探针、加载器、注入与评测脚本，在本地 openEuler 虚拟机验证构建、故障识别和开关探针的性能差异；赛方未给出这两场景的数值性能分数线。
 
 完整交互记录保留在 Codex 任务历史中。向赛事平台提交时，应按组委会要求导出或截图留档，并在设计实现文档和答辩 PPT 中保留本说明的核心内容。
 
