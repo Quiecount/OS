@@ -24,7 +24,7 @@ def monitor_stats(pid):
     return rss, jiffies
 
 
-def run_case(kind, active, trial):
+def run_case(kind, active, trial, monitor_binary=None):
     seconds = 3 if kind == "syscall" else 5
     monitor = None
     path = OUT / f"{kind}-{trial}-{'on' if active else 'off'}.jsonl"
@@ -33,7 +33,7 @@ def run_case(kind, active, trial):
         binary = "syscall_hotspot" if kind == "syscall" else "cpu_hog"
         with path.with_suffix(".log").open("w") as stream:
             monitor = subprocess.Popen(
-                [str(ROOT / "build" / binary), "--duration", str(seconds + 2),
+                [str(monitor_binary or ROOT / "build" / binary), "--duration", str(seconds + 2),
                  "--output", str(path)], stderr=stream
             )
         time.sleep(0.7)
