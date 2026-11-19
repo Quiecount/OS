@@ -15,7 +15,7 @@ BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -Wall -Werror \
 USER_CFLAGS := -g -O2 -Wall -Wextra -Werror $(shell $(PKG_CONFIG) --cflags libbpf)
 USER_LDLIBS := $(shell $(PKG_CONFIG) --libs libbpf) -lelf -lz
 
-PROGRAMS := execsnoop biolatency
+PROGRAMS := execsnoop biolatency syscallhot cpuwatch
 BINARIES := $(addprefix $(BUILD_DIR)/,$(PROGRAMS))
 
 .PHONY: all clean check help
@@ -35,18 +35,20 @@ $(BUILD_DIR)/%.bpf.o: $(PROBE_DIR)/%.bpf.c $(COMMON_DIR)/osmedic.h $(VMLINUX) | 
 $(BUILD_DIR)/%.skel.h: $(BUILD_DIR)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
-$(BUILD_DIR)/%: $(LOADER_DIR)/%.c $(BUILD_DIR)/%.skel.h $(COMMON_DIR)/osmedic.h
+$(BUILD_DIR)/%: $(LOADER_DIR)/%.c $(BUILD_DIR)/%.skel.h $(COMMON_DIR)/osmedic.h $(COMMON_DIR)/monitor_util.h
 	$(CC) $(USER_CFLAGS) -I$(BUILD_DIR) -I$(COMMON_DIR) $< -o $@ $(USER_LDLIBS)
 
 check: all
 	@for binary in $(BINARIES); do test -x "$$binary"; done
 	@echo "STAGE1_BUILD_OK"
+	@echo "STAGE2_BUILD_OK"
 
 clean:
 	rm -rf $(BUILD_DIR)
 
 help:
-	@echo "make        编译两支 eBPF 探针和用户态加载器"
+	@echo "make        编译四支 eBPF 探针和用户态加载器"
 	@echo "make check  编译并检查产物"
 	@echo "make clean  删除构建产物"
 	@echo "sudo bash scripts/stage1-smoke.sh  运行阶段1端到端验收"
+	@echo "sudo bash scripts/stage2-two-scenarios.sh  运行 syscall/CPU 场景验收"

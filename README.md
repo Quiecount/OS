@@ -55,7 +55,7 @@ test.sh             # （开发中）一键测试（PASS/FAIL 判定）
 |---|---|---|
 | 0 | 环境搭建 + 第一支探针 | :white_check_mark: 已完成 |
 | 1 | libbpf 探针基础 | :white_check_mark: 已完成 |
-| 2 | 五场景逐个攻坚 | :hourglass: 待开始 |
+| 2 | 五场景逐个攻坚 | :construction: 场景 1–2 已实现，等待 root 端到端验收；其余待开发 |
 | 3 | 诊断引擎 + 结构化输出 | :hourglass: 待开始 |
 | 4 | LLM 报告层 | :hourglass: 待开始 |
 | 5 | 性能开销评测 + 一键复现 + 文档 + 视频 | :hourglass: 待开始 |
@@ -89,6 +89,23 @@ sudo bash scripts/stage1-smoke.sh
 2026-11-17 已在 openEuler 24.03 LTS 虚拟机完成端到端验收：`EXEC_EVENTS=2`、`IO_HISTOGRAMS=1`、`STAGE1_SMOKE_OK`。
 
 实现说明与限制见 [docs/阶段1_探针基础实现与验收.md](docs/阶段1_探针基础实现与验收.md)。AI 辅助开发披露见 [docs/AI工具使用说明.md](docs/AI工具使用说明.md)。
+
+## 场景 1–2：系统调用热点与 CPU/调度延迟
+
+```bash
+make check
+sudo bash scripts/stage2-two-scenarios.sh
+sudo python3 scripts/bench-two-scenarios.py
+```
+
+单独运行：
+
+```bash
+sudo ./build/syscallhot --interval 1 --duration 15 --output output/syscall.jsonl
+sudo ./build/cpuwatch --interval 1 --duration 15 --output output/cpu.jsonl
+```
+
+两者输出窗口指标 JSONL；触发规则时额外输出含异常类型、关联对象、关键指标、时间窗口、疑似根因、证据链与建议的 `diagnosis` JSONL。默认阈值是**可配置的工程起点，不是自动学习的真实基线**。复现和性能解释见 [docs/场景1-2_实现与性能评测.md](docs/场景1-2_实现与性能评测.md)。
 
 ## 演示视频
 

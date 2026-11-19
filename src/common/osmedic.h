@@ -5,6 +5,7 @@
 #define OSMEDIC_PATH_LEN 256
 #define OSMEDIC_DISK_LEN 32
 #define OSMEDIC_HIST_SLOTS 26
+#define OSMEDIC_RUNQ_SLOTS 24
 
 struct exec_event {
     unsigned long long ktime_ns;
@@ -32,6 +33,40 @@ struct io_hist_key {
     unsigned int minor;
     unsigned int slot;
     char disk[OSMEDIC_DISK_LEN];
+};
+
+struct syscall_key {
+    unsigned int pid;
+    unsigned int syscall_id;
+};
+
+struct syscall_start {
+    unsigned long long started_ns;
+    unsigned int syscall_id;
+};
+
+struct syscall_stats {
+    unsigned long long calls;
+    unsigned long long total_ns;
+    unsigned long long buckets[OSMEDIC_HIST_SLOTS];
+    char comm[OSMEDIC_COMM_LEN];
+};
+
+struct sched_running {
+    unsigned long long started_ns;
+    unsigned int pid;
+};
+
+struct sched_queued {
+    unsigned long long queued_ns;
+};
+
+struct cpu_stats {
+    unsigned long long runtime_ns;
+    unsigned long long runq_total_ns;
+    unsigned long long runq_samples;
+    unsigned long long runq_buckets[OSMEDIC_RUNQ_SLOTS];
+    char comm[OSMEDIC_COMM_LEN];
 };
 
 #endif
