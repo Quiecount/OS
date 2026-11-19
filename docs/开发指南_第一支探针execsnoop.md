@@ -8,7 +8,8 @@
 
 ## 一、目标：做出什么
 
-一个**进程启动追踪器**：系统里任何进程每次被启动，屏幕立刻打印一行——
+一个 **execve 调用追踪器**：每次尝试执行程序都会采集一条记录（包含失败的调用）。
+默认输出契约规定的 JSON Lines；使用 `--pretty` 时屏幕打印表格——
 
 ```
 PID      UID      COMM            FILENAME
@@ -20,7 +21,7 @@ PID      UID      COMM            FILENAME
 
 **验收标准（阶段 0 出口）**：
 1. `make` 一次编译通过
-2. `sudo ./build/execsnoop` 运行后，另开终端敲命令能看到事件输出
+2. `sudo ./build/execsnoop --pretty` 运行后，另开终端敲命令能看到事件输出
 3. 能向队友讲清楚"一次 execve 从内核到屏幕"的完整路径
 
 ## 二、原理：数据是怎么流到屏幕上的
@@ -33,7 +34,7 @@ PID      UID      COMM            FILENAME
 │ trace_execve 探针函数自动运行（几十行 C）       │
 │   ├─ helper 取 pid / uid / 进程名              │
 │   ├─ helper 安全拷贝 filename（用户态指针）     │
-│   └─ bpf_ringbuf_submit() 把事件丢进环形队列    │
+│   └─ bpf_ringbuf_output() 将事件复制到队列      │
 └──────────────────────┬────────────────────────┘
                        │ ringbuf（events map）
 ┌──────────────────────▼────────────────────────┐
@@ -58,7 +59,7 @@ PID      UID      COMM            FILENAME
 |---|---|---|
 | `src/probes/execsnoop.bpf.c` | **探针**（内核态） | clang 编译成 BPF 字节码，装进内核运行 |
 | `src/loader/execsnoop.c` | **加载器**（用户态） | gcc 编译成普通程序：装探针、收事件、打印 |
-| `src/event.h` | 共享结构体 | 两边都 include，保证事件布局一字节不差 |
+| `src/events.h` | 共享结构体 | 两边都 include，保证事件布局一字节不差；字段以接口契约为准 |
 | `Makefile` | 构建 | 一条 make 全搞定 |
 | `src/vmlinux.h` | 自动生成 | make 时从 `/sys/kernel/btf/vmlinux` 生成，**不入库** |
 | `build/` | 产物目录 | **不入库** |
@@ -84,19 +85,21 @@ ls /sys/kernel/btf/vmlinux           # 内核带 BTF（openEuler 24.03 一定有
 
 ```bash
 cd ~
-git clone https://gitlab.eduxiji.net/T2026103369913109/project3331747-425741.git OS
-# 登录：用户名 T2026103369913109，密码 = educg 平台密码
+git clone -o gitlab https://gitlab.eduxiji.net/T2026103369913109/project3331747-425741.git OS
+# 登录：使用有项目权限的比赛 GitLab 账号，密码提示可输入个人访问令牌。
 cd OS
+git switch dev/yu   # yu 的个人分支；mao 使用 dev/mao
 ```
 
-（以后更新代码只需在此目录 `git pull`。）
+以后先 `git fetch gitlab`，在个人分支执行 `git pull --ff-only` 同步个人远程分支，
+再 `git merge gitlab/main` 同步主干；禁止在 main 上进行个人开发。
 
 ### 编译与运行
 
 ```bash
 cd ~/OS            # 仓库根目录（按你 VM 里的实际路径）
 make               # 编译；第一次会自动生成 vmlinux.h，稍慢属正常
-sudo ./build/execsnoop
+sudo ./build/execsnoop --pretty
 ```
 
 保持它运行，**另开一个终端**随便执行命令（`ls`、`bash`、`vim`…），回到第一个终端——每次进程启动都会打印一行。`Ctrl+C` 退出。
@@ -115,9 +118,9 @@ PID      UID      COMM            FILENAME
 ### 6.1 探针侧（src/probes/execsnoop.bpf.c）的 5 个关键点
 
 1. **`SEC("tracepoint/...")`**——把函数声明成探针并指定插座；函数名 `trace_execve` 是加载器查找程序的依据
-2. **`struct event e = {};`**——必须清零再填字段，读未初始化内存会被 Verifier 直接拒绝
+2. **`struct ev_exec e = {};`**——必须清零再填字段，读未初始化内存会被 Verifier 直接拒绝
 3. **三个 helper**：`bpf_get_current_pid_tgid()`（高 32 位是 PID）、`bpf_get_current_comm()`、`bpf_probe_read_user_str()`——execve 传进来的 filename 是**用户态指针**，绝不能直接解引用，必须用 helper 拷贝
-4. **`bpf_ringbuf_submit()`**——事件入队；之后打印、过滤、分析全是用户态的事（复杂逻辑放用户态，探针只做采集）
+4. **`bpf_ringbuf_output(&events, &e, sizeof(e), 0)`**——把栈上的已初始化事件复制入队；打印、分析放用户态。`bpf_ringbuf_submit` 只接受 `reserve` 预留得到的记录指针，不能直接提交栈变量
 5. **`char LICENSE[] SEC("license")`**——tracepoint 程序要求 GPL 兼容声明
 
 ### 6.2 加载器侧（src/loader/execsnoop.c）的四步生命周期
@@ -155,8 +158,18 @@ libbpf API 一一对应：`bpf_object__open_file` / `bpf_object__load` / `bpf_pr
 
 ## 九、完成之后
 
+先确认自己位于个人分支（yu 为 `dev/yu`），按一次提交一件事整理代码与文档：
+
 ```bash
-git add . && git commit -m "feat: 探针① execsnoop（进程启动追踪）" && git push gitlab main
+git status
+git add <本次修改的文件>
+git commit -m "feat: 探针① execsnoop（进程启动追踪）"
+git push gitlab dev/yu
 ```
+
+main 的合并和推送由 owner 负责。
+
+2026-11-19 起，`--duration N` 可限时采集，默认 JSON Lines 可直接交给 collector；
+迁移和验收记录见 [GitLab 同步与 execsnoop 契约迁移](GitLab同步与execsnoop契约迁移.md)。
 
 然后对照《开发计划》§五 阶段 1 清单，开工探针②（块设备 IO 延迟直方图）。

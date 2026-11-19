@@ -73,7 +73,7 @@ test.sh             # 一键测试入口（转调 tests/test.sh）
 |---|---|---|
 | 0 | 环境搭建 + 第一支探针 | yu 的 minimal 已验收；其余环境清单待逐项确认 |
 | 1 | libbpf 探针基础 | :construction: exec/ringbuf 与 IO/map/JSON Lines 已验证，待全员独立复现 |
-| 2 | 五场景逐个攻坚 | :hourglass: 待开始 |
+| 2 | 五场景逐个攻坚 | :construction: execsnoop 契约迁移已验证；五场景指标继续实现 |
 | 3 | 诊断引擎 + 结构化输出 | :hourglass: 待开始 |
 | 4 | LLM 报告层 | :hourglass: 待开始 |
 | 5 | 性能开销评测 + 一键复现 + 文档 + 视频 | :hourglass: 待开始 |
@@ -118,11 +118,24 @@ sudo ./src/.output/io_latency -i 1 -n 5 -o /tmp/osmedic-io.jsonl
 设备过滤、直方图含义与真实 IO 验证见
 [阶段 1：块设备 IO 延迟直方图](docs/阶段1_IO延迟直方图.md)。
 
+GitLab 主干的 execsnoop 已按[接口契约](docs/接口契约.md)迁移为默认 JSON Lines：
+
+```bash
+make check
+sudo ./build/execsnoop --duration 5 > /tmp/execsnoop.jsonl
+python3 analysis/collector.py --input /tmp/execsnoop.jsonl
+# 人工查看表格时：sudo ./build/execsnoop --duration 5 --pretty
+```
+
+新旧实现的区分、工具链参数和本次验收见
+[GitLab 同步与 execsnoop 契约迁移](docs/GitLab同步与execsnoop契约迁移.md)。
+
 ## 演示视频
 
 :construction: 提交前在此补充链接。
 
 ## 说明
 
-- 本仓库为开发主仓，作品最终将同步至大赛托管平台（educg GitLab，https 协议推送）
+- educg GitLab 为比赛官方仓（HTTPS，必推）；GitHub 为尽力同步的镜像
+- yu 在 `dev/yu` 开发和推送；main 合并与发布由 owner 执行
 - 开发过程开源，提交记录即过程性资料
