@@ -12,12 +12,14 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "benchmark"
 TRIALS = int(os.environ.get("TRIALS", "3"))
+SCENARIOS = tuple(os.environ.get("SCENARIOS", "syscall,cpu").split(","))
 
 
 def monitor_stats(pid):
     status = Path(f"/proc/{pid}/status").read_text()
     rss = int(re.search(r"^VmRSS:\s+(\d+)", status, re.M).group(1))
     fields = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
+    # /proc/PID/stat: utime + stime, including loader user and kernel CPU.
     jiffies = int(fields[11]) + int(fields[12])
     return rss, jiffies
 
@@ -60,7 +62,7 @@ def run_case(kind, active, trial):
         else:
             rss_kib = cpu_percent = None
         return {"throughput_per_s": rate, "monitor_rss_kib": rss_kib,
-                "monitor_user_cpu_percent_one_core": cpu_percent}
+                "monitor_cpu_percent_one_core": cpu_percent}
     finally:
         if monitor:
             monitor.wait(timeout=seconds + 5)
@@ -73,13 +75,16 @@ def main():
         raise SystemExit("Run with sudo/root for eBPF attach")
     if TRIALS < 1 or TRIALS > 20:
         raise SystemExit("TRIALS must be in 1..20")
+    if not SCENARIOS or len(set(SCENARIOS)) != len(SCENARIOS) or any(
+            s not in ("syscall", "cpu") for s in SCENARIOS):
+        raise SystemExit("SCENARIOS must be syscall, cpu, or syscall,cpu")
     OUT.mkdir(parents=True, exist_ok=True)
     subprocess.run(["make", "-C", str(ROOT), "check"], check=True)
     subprocess.run(["cc", "-O2", "-Wall", "-Wextra", "-Werror",
                     str(ROOT / "faults/syscall_bomb.c"), "-o",
                     str(ROOT / "build/syscall_bomb")], check=True)
     report = {"kernel": os.uname().release, "trials": TRIALS, "scenarios": {}}
-    for kind in ("syscall", "cpu"):
+    for kind in SCENARIOS:
         runs = {"off": [], "on": []}
         for trial in range(TRIALS):
             for active in ([False, True] if trial % 2 == 0 else [True, False]):
@@ -95,11 +100,12 @@ def main():
                 100 * (off / on - 1), 2),
             "monitor_rss_mib_max": round(max(
                 x["monitor_rss_kib"] for x in runs["on"]) / 1024, 2),
-            "monitor_user_cpu_percent_one_core_median": round(
-                statistics.median(x["monitor_user_cpu_percent_one_core"]
+            "monitor_cpu_percent_one_core_median": round(
+                statistics.median(x["monitor_cpu_percent_one_core"]
                                   for x in runs["on"]), 2),
         }
-    destination = OUT / "result.json"
+    label = "result" if SCENARIOS == ("syscall", "cpu") else "result-" + "-".join(SCENARIOS)
+    destination = OUT / f"{label}.json"
     destination.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report["scenarios"], ensure_ascii=False, indent=2))
     print(f"BENCHMARK_RESULT={destination}")
