@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <math.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -15,6 +16,9 @@
 #include "syscall_hotspot.skel.h"
 
 #define MAX_ROWS 4096
+static double slow_us = 10000.0;
+static unsigned int slow_min_samples = 20;
+static int output_histogram;
 
 struct row {
     struct syscall_key key;
@@ -54,6 +58,57 @@ static int by_calls_desc(const void *a, const void *b)
            (right->value.calls < left->value.calls);
 }
 
+static int expected_wait(unsigned int id)
+{
+    /* These calls intentionally wait; keep their metrics but suppress the
+     * generic slow-call alert. Blocking read/open still use the configured threshold. */
+#ifdef SYS_clock_nanosleep
+    if (id == SYS_clock_nanosleep) return 1;
+#endif
+#ifdef SYS_nanosleep
+    if (id == SYS_nanosleep) return 1;
+#endif
+#ifdef SYS_futex
+    if (id == SYS_futex) return 1;
+#endif
+#ifdef SYS_poll
+    if (id == SYS_poll) return 1;
+#endif
+#ifdef SYS_ppoll
+    if (id == SYS_ppoll) return 1;
+#endif
+#ifdef SYS_epoll_wait
+    if (id == SYS_epoll_wait) return 1;
+#endif
+#ifdef SYS_epoll_pwait
+    if (id == SYS_epoll_pwait) return 1;
+#endif
+#ifdef SYS_select
+    if (id == SYS_select) return 1;
+#endif
+#ifdef SYS_pselect6
+    if (id == SYS_pselect6) return 1;
+#endif
+#ifdef SYS_wait4
+    if (id == SYS_wait4) return 1;
+#endif
+    return 0;
+}
+
+static void emit_slow(FILE *out, const struct row *r, double mean_us,
+                      unsigned long long p99, const char *start, const char *end)
+{
+    fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
+            (unsigned long long)monitor_now_ns(CLOCK_MONOTONIC), r->key.pid, r->value.uid);
+    monitor_json_string(out, r->value.comm);
+    fprintf(out, ",\"id\":%u,\"schema_version\":1,\"event\":\"diagnosis\",\"type\":\"SYSCALL_SLOW\",\"window\":{\"start\":", r->key.syscall_id);
+    monitor_json_string(out, start);
+    fputs(",\"end\":", out); monitor_json_string(out, end);
+    fprintf(out, "},\"related_objects\":[{\"kind\":\"process\",\"pid\":%u},{\"kind\":\"syscall\",\"id\":%u}],\"key_metrics\":{\"mean_us\":%.3f,\"p99_upper_us\":%llu,\"threshold_us\":%.3f,\"samples\":%llu},",
+            r->key.pid, r->key.syscall_id, mean_us, p99, slow_us, r->value.calls);
+    fputs("\"suspected_root_cause\":\"系统调用平均耗时超过配置阈值\",\"evidence_chain\":[\"完成调用样本数达到最低要求\",\"平均延迟超过慢调用阈值，不要求进入频率 Top-N\"],\"recommendation\":[\"结合调用类型区分预期睡眠与异常阻塞\"]}\n", out);
+}
+
 static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                        double baseline_rate, double min_rate,
                        const char *start, const char *end)
@@ -77,7 +132,7 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
     }
     qsort(rows, n, sizeof(*rows), by_calls_desc);
     uint64_t ts_ns = monitor_now_ns(CLOCK_MONOTONIC);
-    for (size_t i = 0; i < n && i < top; ++i) {
+    for (size_t i = 0; i < n; ++i) {
         struct row *r = &rows[i];
         double rate = r->value.calls / seconds;
         double mean_us = r->value.calls ?
@@ -86,6 +141,9 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                                               OSMEDIC_HIST_SLOTS,
                                               r->value.calls);
         r->value.comm[OSMEDIC_COMM_LEN - 1] = '\0';
+        if (!expected_wait(r->key.syscall_id) && r->value.calls >= slow_min_samples && mean_us > slow_us)
+            emit_slow(out, r, mean_us, p99, start, end);
+        if (i >= top) continue;
         fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
                 (unsigned long long)ts_ns, r->key.pid, r->value.uid);
         monitor_json_string(out, r->value.comm);
@@ -96,8 +154,16 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
         monitor_json_string(out, end);
         fputs("},\"syscall\":", out);
         monitor_json_string(out, syscall_name(r->key.syscall_id));
-        fprintf(out, ",\"calls\":%llu,\"rate_per_sec\":%.2f,\"mean_us\":%.2f,\"p99_upper_us\":%llu}\n",
-                r->value.calls, rate, mean_us, p99);
+        fprintf(out, ",\"calls\":%llu,\"rate_per_sec\":%.2f,\"mean_us\":%.3f,\"p99_upper_us\":%llu,\"histogram\":\"log2_8_ns\",\"p99_overflow\":%s",
+                r->value.calls, rate, mean_us, p99,
+                r->value.buckets[OSMEDIC_HIST_SLOTS - 1] > r->value.calls / 100 ? "true" : "false");
+        if (output_histogram) {
+            fputs(",\"latency_buckets\":[", out);
+            for (unsigned int j = 0; j < OSMEDIC_HIST_SLOTS; ++j)
+                fprintf(out, "%s%llu", j ? "," : "", r->value.buckets[j]);
+            fputc(']', out);
+        }
+        fputs("}\n", out);
         if (rate < min_rate || rate < baseline_rate * 10.0)
             continue;
         fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
@@ -146,6 +212,9 @@ int main(int argc, char **argv)
         {"top", required_argument, NULL, 't'},
         {"baseline-rate", required_argument, NULL, 'b'},
         {"min-rate", required_argument, NULL, 'm'},
+        {"slow-us", required_argument, NULL, 's'},
+        {"slow-min-samples", required_argument, NULL, 'n'},
+        {"histogram", no_argument, NULL, 'H'},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0},
     };
@@ -158,7 +227,7 @@ int main(int argc, char **argv)
     uint64_t begin, last;
     int opt, result = 1;
 
-    while ((opt = getopt_long(argc, argv, "o:i:d:t:b:m:h", options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:i:d:t:b:m:s:n:Hh", options, NULL)) != -1) {
         char *endptr;
         switch (opt) {
         case 'o': path = optarg; break;
@@ -166,14 +235,19 @@ int main(int argc, char **argv)
         case 'd': if (strcmp(optarg, "0") && parse_positive(optarg, &duration)) return 2; break;
         case 't': if (parse_positive(optarg, &top)) return 2; break;
         case 'b':
+        case 's':
         case 'm': {
             double v = strtod(optarg, &endptr);
-            if (!optarg[0] || *endptr || v <= 0 || v > 1000000000) return 2;
-            if (opt == 'b') baseline_rate = v; else min_rate = v;
+            if (!optarg[0] || *endptr || !isfinite(v) || v <= 0 || v > 1000000000) return 2;
+            if (opt == 'b') baseline_rate = v;
+            else if (opt == 's') slow_us = v;
+            else min_rate = v;
             break;
         }
+        case 'n': if (parse_positive(optarg, &slow_min_samples)) return 2; break;
+        case 'H': output_histogram = 1; break;
         case 'h':
-            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S]\n", stderr);
+            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S] [--slow-us US] [--slow-min-samples N] [--histogram]\n", stderr);
             return 0;
         default: return 2;
         }

@@ -5,13 +5,15 @@
 
 char LICENSE[] SEC("license") = "GPL";
 const volatile unsigned int ignored_pid = 0;
+static const struct cpu_stats empty_stats = {};
 
+/* All switched-out time: runnable waiting as well as sleeping/blocked. */
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 32768);
     __type(key, unsigned int);
-    __type(value, struct sched_running);
-} running SEC(".maps");
+    __type(value, struct sched_queued);
+} offcpu SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -32,26 +34,14 @@ static __always_inline struct cpu_stats *get_stats(unsigned int pid,
 {
     struct cpu_stats *stats = bpf_map_lookup_elem(&cpu_totals, &pid);
     if (!stats) {
-        struct cpu_stats zero = {};
-        zero.uid = BPF_CORE_READ(task, real_cred, uid.val);
-        bpf_core_read_str(zero.comm, sizeof(zero.comm), &task->comm);
-        bpf_map_update_elem(&cpu_totals, &pid, &zero, BPF_NOEXIST);
+        bpf_map_update_elem(&cpu_totals, &pid, &empty_stats, BPF_NOEXIST);
         stats = bpf_map_lookup_elem(&cpu_totals, &pid);
-    }
-    return stats;
-}
-
-static __always_inline unsigned int runq_slot(unsigned long long us)
-{
-    unsigned int slot = OSMEDIC_RUNQ_SLOTS - 1;
-#pragma unroll
-    for (int i = 0; i < OSMEDIC_RUNQ_SLOTS - 1; i++) {
-        if (us <= (1ULL << i)) {
-            slot = i;
-            break;
+        if (stats) {
+            stats->uid = BPF_CORE_READ(task, real_cred, uid.val);
+            bpf_core_read_str(stats->comm, sizeof(stats->comm), &task->comm);
         }
     }
-    return slot;
+    return stats;
 }
 
 static __always_inline int record_wakeup(struct bpf_raw_tracepoint_args *ctx)
@@ -86,9 +76,7 @@ int trace_sched_switch(struct bpf_raw_tracepoint_args *ctx)
 {
     struct task_struct *prev = (struct task_struct *)ctx->args[1];
     struct task_struct *next = (struct task_struct *)ctx->args[2];
-    struct sched_running *was_running;
     struct sched_queued *was_queued;
-    struct sched_running now_running;
     struct sched_queued now_queued;
     struct cpu_stats *stats;
     unsigned long long now = bpf_ktime_get_ns();
@@ -101,17 +89,24 @@ int trace_sched_switch(struct bpf_raw_tracepoint_args *ctx)
     prev_pid = BPF_CORE_READ(prev, tgid);
     next_pid = BPF_CORE_READ(next, tgid);
 
-    was_running = bpf_map_lookup_elem(&running, &prev_tid);
-    if (was_running) {
-        unsigned int running_pid = was_running->pid;
-        unsigned long long started_ns = was_running->started_ns;
-        if (running_pid && running_pid != ignored_pid && now >= started_ns) {
-            stats = get_stats(running_pid, prev);
-            if (stats)
-                __sync_fetch_and_add(&stats->runtime_ns, now - started_ns);
-        }
-        bpf_map_delete_elem(&running, &prev_tid);
+    if (prev_tid && prev_pid && prev_pid != ignored_pid &&
+        BPF_CORE_READ(prev, exit_state) == 0) {
+        struct sched_queued stopped = {.queued_ns = now};
+        bpf_map_update_elem(&offcpu, &prev_tid, &stopped, BPF_ANY);
     }
+    struct sched_queued *stopped = bpf_map_lookup_elem(&offcpu, &next_tid);
+    if (stopped) {
+        if (next_pid && next_pid != ignored_pid && now >= stopped->queued_ns) {
+            unsigned long long elapsed = now - stopped->queued_ns;
+            stats = get_stats(next_pid, next);
+            if (stats) {
+                __sync_fetch_and_add(&stats->offcpu_total_ns, elapsed);
+                __sync_fetch_and_add(&stats->offcpu_samples, 1);
+            }
+        }
+        bpf_map_delete_elem(&offcpu, &next_tid);
+    }
+
     /* TASK_RUNNING (0) means the switched-out task is waiting for a CPU. */
     if (prev_tid && prev_pid && prev_pid != ignored_pid &&
         BPF_CORE_READ(prev, __state) == 0) {
@@ -123,7 +118,7 @@ int trace_sched_switch(struct bpf_raw_tracepoint_args *ctx)
     if (was_queued) {
         if (next_pid && next_pid != ignored_pid && now >= was_queued->queued_ns) {
             unsigned long long elapsed = now - was_queued->queued_ns;
-            unsigned int slot = runq_slot(elapsed / 1000);
+            unsigned int slot = latency_bucket(elapsed);
             stats = get_stats(next_pid, next);
             if (stats) {
                 __sync_fetch_and_add(&stats->runq_total_ns, elapsed);
@@ -132,11 +127,6 @@ int trace_sched_switch(struct bpf_raw_tracepoint_args *ctx)
             }
         }
         bpf_map_delete_elem(&queued, &next_tid);
-    }
-    if (next_tid && next_pid && next_pid != ignored_pid) {
-        now_running.started_ns = now;
-        now_running.pid = next_pid;
-        bpf_map_update_elem(&running, &next_tid, &now_running, BPF_ANY);
     }
     return 0;
 }

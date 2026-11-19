@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include "latency_hist.h"
 
 static volatile sig_atomic_t monitor_stop;
 
@@ -78,7 +79,7 @@ static unsigned long long monitor_p99(const unsigned long long *buckets,
     for (unsigned int i = 0; i < slots; ++i) {
         seen += buckets[i];
         if (seen >= target)
-            return 1ULL << i;
+            return (latency_upper_ns(i) + 999) / 1000;
     }
     return 0;
 }

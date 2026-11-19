@@ -139,9 +139,10 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
             monitor_json_string(out, start);
             fputs(",\"end\":", out);
             monitor_json_string(out, end);
-            fprintf(out, "},\"cpu_percent_one_core\":%.2f,\"runq_wait_ms\":%.3f,\"runq_samples\":%llu,\"runq_p99_upper_us\":%llu,\"runq_buckets\":[",
-                    cpu_pct, r->stats.runq_total_ns / 1e6,
-                    r->stats.runq_samples, p99);
+            fprintf(out, "},\"cpu_percent_one_core\":%.2f,\"offcpu_completed_ms\":%.3f,\"offcpu_completed_samples\":%llu,\"runq_wait_ms\":%.3f,\"runq_samples\":%llu,\"runq_p99_upper_us\":%llu,\"histogram\":\"log2_8_ns\",\"runq_p99_overflow\":%s,\"runq_buckets\":[",
+                    cpu_pct, r->stats.offcpu_total_ns / 1e6, r->stats.offcpu_samples,
+                    r->stats.runq_total_ns / 1e6, r->stats.runq_samples, p99,
+                    r->stats.runq_buckets[OSMEDIC_RUNQ_SLOTS - 1] > r->stats.runq_samples / 100 ? "true" : "false");
             for (unsigned int j = 0; j < OSMEDIC_RUNQ_SLOTS; ++j)
                 fprintf(out, "%s%llu", j ? "," : "", r->stats.runq_buckets[j]);
             fputs("]}\n", out);

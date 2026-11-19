@@ -4,6 +4,18 @@
 
 char LICENSE[] SEC("license") = "GPL";
 const volatile unsigned int ignored_pid = 0;
+static const struct syscall_stats empty_stats = {};
+
+struct syscall_fast {
+    unsigned long long tid;
+    struct syscall_start start;
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, unsigned int);
+    __type(value, struct syscall_fast);
+} fast_start SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -19,40 +31,22 @@ struct {
     __type(value, struct syscall_stats);
 } syscall_totals SEC(".maps");
 
-static __always_inline unsigned int latency_slot(unsigned long long us)
-{
-    unsigned int slot = OSMEDIC_HIST_SLOTS - 1;
-#pragma unroll
-    for (int i = 0; i < OSMEDIC_HIST_SLOTS - 1; i++) {
-        if (us <= (1ULL << i)) {
-            slot = i;
-            break;
-        }
-    }
-    return slot;
-}
-
 SEC("raw_tp/sys_enter")
 int trace_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 {
     unsigned long long tid = bpf_get_current_pid_tgid();
-    struct syscall_start *cached;
+    unsigned int zero = 0;
 
     /* Avoid observing the monitor's own map syscalls. */
     if ((tid >> 32) == 0 || (tid >> 32) == ignored_pid)
         return 0;
-    /* A thread cannot execute two syscalls concurrently, even after migration.
-     * Reuse its entry instead of allocating/freeing an LRU node per syscall. */
-    cached = bpf_map_lookup_elem(&syscall_starts, &tid);
+    /* BPF execution cannot migrate. sched_switch spills an active entry to
+     * the TID map before another task can reuse this CPU's cache. */
+    struct syscall_fast *cached = bpf_map_lookup_elem(&fast_start, &zero);
     if (cached) {
-        cached->syscall_id = (unsigned int)ctx->args[1];
-        cached->started_ns = bpf_ktime_get_ns();
-    } else {
-        struct syscall_start start = {
-            .started_ns = bpf_ktime_get_ns(),
-            .syscall_id = (unsigned int)ctx->args[1],
-        };
-        bpf_map_update_elem(&syscall_starts, &tid, &start, BPF_ANY);
+        cached->tid = tid;
+        cached->start.syscall_id = (unsigned int)ctx->args[1];
+        cached->start.started_ns = bpf_ktime_get_ns();
     }
     return 0;
 }
@@ -66,11 +60,14 @@ int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
     struct syscall_stats *stats;
     unsigned long long elapsed;
     unsigned int slot;
+    unsigned int zero = 0;
 
     (void)ctx;
     if ((tid >> 32) == 0 || (tid >> 32) == ignored_pid)
         return 0;
-    start = bpf_map_lookup_elem(&syscall_starts, &tid);
+    struct syscall_fast *cached = bpf_map_lookup_elem(&fast_start, &zero);
+    int fast = cached && cached->tid == tid && cached->start.started_ns;
+    start = fast ? &cached->start : bpf_map_lookup_elem(&syscall_starts, &tid);
     if (!start || !start->started_ns)
         return 0;
     elapsed = bpf_ktime_get_ns() - start->started_ns;
@@ -78,23 +75,38 @@ int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
     key.syscall_id = start->syscall_id;
     /* An unmatched exit must never reuse a previous syscall's timestamp. */
     start->started_ns = 0;
+    if (!fast) bpf_map_delete_elem(&syscall_starts, &tid);
     if (!key.pid)
         return 0;
     stats = bpf_map_lookup_elem(&syscall_totals, &key);
     if (!stats) {
-        /* Initialize the large histogram only on the first call in a window. */
-        struct syscall_stats zero = {};
-        zero.uid = (unsigned int)bpf_get_current_uid_gid();
-        bpf_get_current_comm(zero.comm, sizeof(zero.comm));
-        bpf_map_update_elem(&syscall_totals, &key, &zero, BPF_NOEXIST);
+        /* Read-only template avoids placing a histogram on the BPF stack. */
+        bpf_map_update_elem(&syscall_totals, &key, &empty_stats, BPF_NOEXIST);
         stats = bpf_map_lookup_elem(&syscall_totals, &key);
+        if (stats) {
+            stats->uid = (unsigned int)bpf_get_current_uid_gid();
+            bpf_get_current_comm(stats->comm, sizeof(stats->comm));
+        }
     }
     if (!stats)
         return 0;
-    slot = latency_slot(elapsed / 1000);
+    slot = latency_bucket(elapsed);
     __sync_fetch_and_add(&stats->calls, 1);
     __sync_fetch_and_add(&stats->total_ns, elapsed);
     __sync_fetch_and_add(&stats->buckets[slot], 1);
+    return 0;
+}
+
+SEC("raw_tp/sched_switch")
+int trace_syscall_switch(struct bpf_raw_tracepoint_args *ctx)
+{
+    (void)ctx;
+    unsigned int zero = 0;
+    struct syscall_fast *cached = bpf_map_lookup_elem(&fast_start, &zero);
+    if (cached && cached->start.started_ns) {
+        bpf_map_update_elem(&syscall_starts, &cached->tid, &cached->start, BPF_ANY);
+        cached->start.started_ns = 0;
+    }
     return 0;
 }
 
@@ -102,6 +114,9 @@ SEC("raw_tp/sched_process_exit")
 int trace_syscall_task_exit(struct bpf_raw_tracepoint_args *ctx)
 {
     unsigned long long tid = bpf_get_current_pid_tgid();
+    unsigned int zero = 0;
+    struct syscall_fast *cached = bpf_map_lookup_elem(&fast_start, &zero);
+    if (cached && cached->tid == tid) cached->start.started_ns = 0;
     (void)ctx;
     bpf_map_delete_elem(&syscall_starts, &tid);
     return 0;

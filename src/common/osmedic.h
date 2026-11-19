@@ -4,8 +4,9 @@
 #define OSMEDIC_COMM_LEN 16
 #define OSMEDIC_PATH_LEN 256
 #define OSMEDIC_DISK_LEN 32
-#define OSMEDIC_HIST_SLOTS 26
-#define OSMEDIC_RUNQ_SLOTS 24
+#include "latency_hist.h"
+#define OSMEDIC_HIST_SLOTS OSMEDIC_FINE_SLOTS
+#define OSMEDIC_RUNQ_SLOTS OSMEDIC_FINE_SLOTS
 
 struct exec_event {
     unsigned long long ktime_ns;
@@ -66,6 +67,8 @@ struct cpu_stats {
     unsigned long long runtime_ns;
     unsigned long long runq_total_ns;
     unsigned long long runq_samples;
+    unsigned long long offcpu_total_ns;
+    unsigned long long offcpu_samples;
     unsigned long long runq_buckets[OSMEDIC_RUNQ_SLOTS];
     unsigned int uid;
     char comm[OSMEDIC_COMM_LEN];
