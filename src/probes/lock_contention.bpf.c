@@ -25,6 +25,6 @@ int trace_futex_enter(struct trace_event_raw_sys_enter *ctx)
     e.uaddr = (unsigned long)ctx->args[0];  // futex(uaddr, op, ...) 第一个参数：锁地址
     e.op = (int)ctx->args[1];               // 操作码（WAIT/WAKE 等）
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_output(&events, &e, sizeof(e), 0);
     return 0;
 }

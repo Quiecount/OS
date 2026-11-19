@@ -25,6 +25,6 @@ int trace_page_fault(void *ctx)
     bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
     e.addr = 0;                     // TODO(阶段2)：从 ctx 取缺页地址并统计速率
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_output(&events, &e, sizeof(e), 0);
     return 0;
 }

@@ -24,6 +24,6 @@ int trace_syscall_enter(struct trace_event_raw_sys_enter *ctx)
     bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
     e.id = ctx->id;                 // 系统调用号
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_output(&events, &e, sizeof(e), 0);
     return 0;
 }

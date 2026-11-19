@@ -25,6 +25,6 @@ int trace_sched_switch(struct trace_event_raw_sched_switch *ctx)
     e.prev_pid = ctx->prev_pid;     // 被换下的进程
     e.next_pid = ctx->next_pid;     // 换上的进程
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_output(&events, &e, sizeof(e), 0);
     return 0;
 }

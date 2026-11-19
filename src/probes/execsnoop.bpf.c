@@ -28,6 +28,8 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
 {
     struct ev_exec e = {};  // 必须清零！读未初始化内存会被 Verifier 直接拒绝
 
+    e.c.ts_ns = bpf_ktime_get_ns();
+
     // 三个内核预注册的 helper：取当前进程的 pid / uid / 进程名（统一放 ev_common 头）
     e.c.pid = bpf_get_current_pid_tgid() >> 32;    // 返回值高 32 位是 pid
     e.c.uid = bpf_get_current_uid_gid();           // 返回值低 32 位是 uid
@@ -39,6 +41,6 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
                             (const void *)ctx->args[0]);
 
     // 事件入队，交给用户态；后续打印、过滤、分析都在用户态做
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_output(&events, &e, sizeof(e), 0);
     return 0;
 }

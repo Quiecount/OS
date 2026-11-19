@@ -27,6 +27,6 @@ int trace_block_issue(void *ctx)
     bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
     e.delta_ns = 0;                                 // TODO(阶段2)：配对后填真实延迟
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_output(&events, &e, sizeof(e), 0);
     return 0;
 }
