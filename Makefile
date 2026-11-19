@@ -20,7 +20,7 @@ BPF_OBJS := $(patsubst src/probes/%.bpf.c,$(BUILD)/%.bpf.o,$(wildcard src/probes
 # 故障注入用 C 程序（纯用户态）
 FAULT_BINS := $(BUILD)/syscall_bomb $(BUILD)/lock_contention
 
-.PHONY: all clean check
+.PHONY: all clean check check-verifier check-stage1
 
 all: $(BPF_OBJS) $(BUILD)/execsnoop $(FAULT_BINS)
 
@@ -53,6 +53,16 @@ $(BUILD)/lock_contention: faults/lock_contention.c
 check: all
 	python3 tests/test_execsnoop.py ExecsnoopTest.test_cli_validation
 	$(MAKE) -C src check-io-math
+
+$(BUILD)/verifier_lab: src/loader/verifier_lab.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBBPF_CFLAGS) $< $(LDFLAGS) -o $@ $(LIBBPF_LIBS)
+
+check-verifier: $(BUILD)/verifier_lab
+	PYTHONDONTWRITEBYTECODE=1 python3 tests/verifier_lab.py
+
+check-stage1:
+	PYTHONDONTWRITEBYTECODE=1 python3 tests/stage1_acceptance.py
 
 clean:
 	rm -rf $(BUILD) src/vmlinux.h
