@@ -72,8 +72,8 @@ test.sh             # 一键测试入口（转调 tests/test.sh）
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 0 | 环境搭建 + 第一支探针 | yu 的 minimal 已验收；其余环境清单待逐项确认 |
-| 1 | libbpf 探针基础 | :construction: exec/ringbuf 与 IO/map/JSON Lines 已验证，待全员独立复现 |
-| 2 | 五场景逐个攻坚 | :construction: execsnoop 契约迁移已验证；五场景指标继续实现 |
+| 1 | libbpf 探针基础 | :construction: 系统工具链、20 项测试及 Verifier 实验通过，待全员独立验收 |
+| 2 | 五场景逐个攻坚 | :hourglass: 阶段 1 全员验收后推进 |
 | 3 | 诊断引擎 + 结构化输出 | :hourglass: 待开始 |
 | 4 | LLM 报告层 | :hourglass: 待开始 |
 | 5 | 性能开销评测 + 一键复现 + 文档 + 视频 | :hourglass: 待开始 |
@@ -129,6 +129,16 @@ python3 analysis/collector.py --input /tmp/execsnoop.jsonl
 
 新旧实现的区分、工具链参数和本次验收见
 [GitLab 同步与 execsnoop 契约迁移](docs/GitLab同步与execsnoop契约迁移.md)。
+
+阶段 1 一键工程验收（先按[验收指南](docs/阶段1验收与独立复现指南.md)准备系统工具链）：
+
+```bash
+sudo make check-stage1
+```
+
+该命令重建两套示例、执行测试与 Verifier 错误/修复实验，并把日志和结果保存到
+被忽略的 `build/stage1-evidence/`。成员理解与独立复现另按
+[成员验收记录](docs/阶段1_成员验收记录.md)逐人留档。
 
 ## 演示视频
 
