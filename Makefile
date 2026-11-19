@@ -23,19 +23,28 @@ FAULT_BINS := $(BUILD)/syscall_bomb $(BUILD)/lock_contention
 
 all: $(BPF_OBJS) $(BUILD)/execsnoop $(BUILD)/syscall_hotspot $(BUILD)/cpu_hog $(FAULT_BINS)
 
+.PHONY: quality-tools
+quality-tools: check $(BUILD)/quality-workload $(BUILD)/quality-reference
+
+$(BUILD)/quality-workload: tests/quality-workload.c
+	$(CC) $(USER_CFLAGS) -pthread $< -o $@
+
+$(BUILD)/quality-reference: tests/quality-reference.c $(BUILD)/quality_reference.skel.h
+	$(CC) $(USER_CFLAGS) -Ibuild $< -o $@ $(USER_LIBS)
+
 # 从当前内核 BTF 自动生成内核类型头（只在缺失时执行；git 不跟踪）
 src/vmlinux.h:
 	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # eBPF 探针：clang 交叉编译到 BPF 目标（产物是字节码，不是本机机器码）
-$(BUILD)/%.bpf.o: src/probes/%.bpf.c src/events.h src/vmlinux.h src/common/osmedic.h
+$(BUILD)/%.bpf.o: src/probes/%.bpf.c src/events.h src/vmlinux.h src/common/osmedic.h src/common/latency_hist.h
 	@mkdir -p $(BUILD)
 	$(CLANG) -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) -Wall -Werror -Isrc -Isrc/common -c $< -o $@
 
 $(BUILD)/%.skel.h: $(BUILD)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
-$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h src/common/proc_cpu.h
+$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h src/common/proc_cpu.h src/common/latency_hist.h
 	$(CC) $(USER_CFLAGS) -I$(BUILD) -Isrc -Isrc/common $< -o $@ $(USER_LIBS)
 
 # 探针① 的用户态加载器（其余场景加载器按此模板在阶段 2 补齐）

@@ -24,8 +24,8 @@ def monitor_stats(pid):
     return rss, jiffies
 
 
-def run_case(kind, active, trial, monitor_binary=None):
-    seconds = 3 if kind == "syscall" else 5
+def run_case(kind, active, trial, monitor_binary=None, seconds=None):
+    seconds = seconds if seconds is not None else (3 if kind == "syscall" else 5)
     monitor = None
     path = OUT / f"{kind}-{trial}-{'on' if active else 'off'}.jsonl"
     if active:
