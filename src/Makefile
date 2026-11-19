@@ -33,7 +33,8 @@ $(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
 $(OUTPUT)/exec_trace: probes/exec_trace.h
-$(OUTPUT)/io_latency: probes/io_latency.h
+$(OUTPUT)/io_latency: loader/io_latency_learning.c probes/io_latency.h $(OUTPUT)/io_latency.skel.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBBPF_CFLAGS) -I$(OUTPUT) -Iprobes $< $(LDFLAGS) $(LIBBPF_LIBS) -o $@
 
 $(OUTPUT)/%: loader/%.c $(OUTPUT)/%.skel.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBBPF_CFLAGS) -I$(OUTPUT) -Iprobes $< $(LDFLAGS) $(LIBBPF_LIBS) -o $@
