@@ -33,6 +33,7 @@ static __always_inline struct cpu_stats *get_stats(unsigned int pid,
     struct cpu_stats *stats = bpf_map_lookup_elem(&cpu_totals, &pid);
     if (!stats) {
         struct cpu_stats zero = {};
+        zero.uid = BPF_CORE_READ(task, real_cred, uid.val);
         bpf_core_read_str(zero.comm, sizeof(zero.comm), &task->comm);
         bpf_map_update_elem(&cpu_totals, &pid, &zero, BPF_NOEXIST);
         stats = bpf_map_lookup_elem(&cpu_totals, &pid);

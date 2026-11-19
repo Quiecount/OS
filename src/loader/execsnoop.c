@@ -1,205 +1,95 @@
-#define _POSIX_C_SOURCE 200809L
-
-#include <errno.h>
-#include <getopt.h>
-#include <signal.h>
-#include <stdbool.h>
-#include <stdint.h>
+// 探针① execsnoop 的用户态加载器
+// 职责：把编译好的探针装进内核（open → load → attach）→ 从 ringbuf 收事件 → 打印
+// 这个骨架（四步生命周期）会被后续所有探针复用
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-
+#include <signal.h>
+#include <errno.h>
 #include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#include "events.h"
 
-#include "execsnoop.skel.h"
-#include "osmedic.h"
+static volatile sig_atomic_t exiting = 0;  // Ctrl+C 退出标志
 
-static volatile sig_atomic_t stop;
-static FILE *output;
-static uint64_t realtime_offset_ns;
+static void on_sigint(int sig) { exiting = 1; }
 
-static void handle_signal(int signal_number)
+// ringbuf 回调：每收到一个事件，内核数据被拷贝到 data 指向这里
+static int handle_event(void *ctx, void *data, size_t data_sz)
 {
-    (void)signal_number;
-    stop = 1;
-}
-
-static uint64_t clock_ns(clockid_t clock_id)
-{
-    struct timespec value;
-
-    if (clock_gettime(clock_id, &value) != 0)
-        return 0;
-    return (uint64_t)value.tv_sec * 1000000000ULL + (uint64_t)value.tv_nsec;
-}
-
-static void format_timestamp(uint64_t timestamp_ns, char *buffer, size_t size)
-{
-    time_t seconds = (time_t)(timestamp_ns / 1000000000ULL);
-    unsigned int milliseconds = (timestamp_ns % 1000000000ULL) / 1000000ULL;
-    struct tm utc;
-    char base[32];
-
-    gmtime_r(&seconds, &utc);
-    strftime(base, sizeof(base), "%Y-%m-%dT%H:%M:%S", &utc);
-    snprintf(buffer, size, "%s.%03uZ", base, milliseconds);
-}
-
-static void write_json_string(FILE *stream, const char *value)
-{
-    const unsigned char *cursor = (const unsigned char *)value;
-
-    fputc('"', stream);
-    while (*cursor) {
-        switch (*cursor) {
-        case '"':
-            fputs("\\\"", stream);
-            break;
-        case '\\':
-            fputs("\\\\", stream);
-            break;
-        case '\b':
-            fputs("\\b", stream);
-            break;
-        case '\f':
-            fputs("\\f", stream);
-            break;
-        case '\n':
-            fputs("\\n", stream);
-            break;
-        case '\r':
-            fputs("\\r", stream);
-            break;
-        case '\t':
-            fputs("\\t", stream);
-            break;
-        default:
-            if (*cursor < 0x20)
-                fprintf(stream, "\\u%04x", *cursor);
-            else
-                fputc(*cursor, stream);
-        }
-        cursor++;
-    }
-    fputc('"', stream);
-}
-
-static int handle_event(void *context, void *data, size_t data_size)
-{
-    const struct exec_event *event = data;
-    char timestamp[48];
-
-    (void)context;
-    if (data_size < sizeof(*event))
-        return 0;
-
-    format_timestamp(realtime_offset_ns + event->ktime_ns, timestamp,
-                     sizeof(timestamp));
-    fputs("{\"schema_version\":1,\"event\":\"process_exec\",\"timestamp\":", output);
-    write_json_string(output, timestamp);
-    fprintf(output, ",\"ktime_ns\":%llu,\"pid\":%u,\"tid\":%u,\"uid\":%u,\"comm\":",
-            event->ktime_ns, event->pid, event->tid, event->uid);
-    write_json_string(output, event->comm);
-    fputs(",\"filename\":", output);
-    write_json_string(output, event->filename);
-    fputs("}\n", output);
-    fflush(output);
+    const struct ev_exec *e = data;
+    printf("%-8u %-8u %-16.16s %s\n", e->c.pid, e->c.uid, e->c.comm, e->filename);
     return 0;
-}
-
-static void usage(const char *program)
-{
-    fprintf(stderr,
-            "用法: %s [-o FILE|-] [-d SECONDS]\n"
-            "  -o, --output FILE     JSONL 输出文件，- 表示标准输出（默认）\n"
-            "  -d, --duration SEC    运行秒数，0 表示持续运行（默认）\n",
-            program);
 }
 
 int main(int argc, char **argv)
 {
-    const struct option options[] = {
-        {"output", required_argument, NULL, 'o'},
-        {"duration", required_argument, NULL, 'd'},
-        {"help", no_argument, NULL, 'h'},
-        {0, 0, 0, 0},
-    };
-    const char *output_path = "-";
-    unsigned long duration = 0;
-    struct execsnoop_bpf *skeleton = NULL;
-    struct ring_buffer *ring = NULL;
-    uint64_t deadline_ns = 0;
-    int option;
-    int result = 1;
+    struct bpf_object *obj = NULL;
+    struct bpf_program *prog = NULL;
+    struct bpf_link   *link = NULL;
+    struct bpf_map    *map  = NULL;
+    struct ring_buffer *rb  = NULL;
+    int err = 0;
 
-    while ((option = getopt_long(argc, argv, "o:d:h", options, NULL)) != -1) {
-        switch (option) {
-        case 'o':
-            output_path = optarg;
-            break;
-        case 'd':
-            duration = strtoul(optarg, NULL, 10);
-            break;
-        case 'h':
-            usage(argv[0]);
-            return 0;
-        default:
-            usage(argv[0]);
-            return 2;
-        }
+    signal(SIGINT, on_sigint);
+    signal(SIGTERM, on_sigint);
+
+    // ① open：读取编译好的 BPF 目标文件（注意是相对路径，必须在仓库根目录运行）
+    obj = bpf_object__open_file("build/execsnoop.bpf.o", NULL);
+    if (!obj) {
+        fprintf(stderr, "[错误] 打不开 build/execsnoop.bpf.o —— 先在仓库根目录 make，并在根目录运行\n");
+        return 1;
     }
 
-    output = stdout;
-    if (strcmp(output_path, "-") != 0) {
-        output = fopen(output_path, "a");
-        if (!output) {
-            fprintf(stderr, "无法打开输出文件 %s: %s\n", output_path, strerror(errno));
-            return 1;
-        }
-    }
-
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
-    realtime_offset_ns = clock_ns(CLOCK_REALTIME) - clock_ns(CLOCK_MONOTONIC);
-    if (duration > 0)
-        deadline_ns = clock_ns(CLOCK_MONOTONIC) + duration * 1000000000ULL;
-
-    skeleton = execsnoop_bpf__open_and_load();
-    if (!skeleton) {
-        fprintf(stderr, "加载 execsnoop BPF 对象失败；请使用 root 或授予 CAP_BPF/CAP_PERFMON。\n");
-        goto cleanup;
-    }
-    if (execsnoop_bpf__attach(skeleton) != 0) {
-        fprintf(stderr, "挂载 execve tracepoint 失败。\n");
+    // ② load：交给内核 Verifier 安检 + JIT 编译成机器码
+    err = bpf_object__load(obj);
+    if (err) {
+        fprintf(stderr, "[错误] 加载失败（errno=%d）——检查是否 sudo；上方 verifier 日志会写明拒绝原因\n", err);
         goto cleanup;
     }
 
-    ring = ring_buffer__new(bpf_map__fd(skeleton->maps.events), handle_event,
-                            NULL, NULL);
-    if (!ring) {
-        fprintf(stderr, "创建 ring buffer 读取器失败。\n");
+    // 找到探针程序，挂载到它声明的 tracepoint 插座上
+    prog = bpf_object__find_program_by_name(obj, "trace_execve");
+    if (!prog) {
+        fprintf(stderr, "[错误] BPF 目标里找不到名为 trace_execve 的程序\n");
+        err = 1;
+        goto cleanup;
+    }
+    link = bpf_program__attach(prog);
+    if (!link) {
+        fprintf(stderr, "[错误] 挂载 tracepoint 失败\n");
+        err = 1;
         goto cleanup;
     }
 
-    fprintf(stderr, "execsnoop 已启动，JSONL 输出到 %s。按 Ctrl-C 停止。\n", output_path);
-    while (!stop) {
-        int poll_result = ring_buffer__poll(ring, 200);
-        if (poll_result == -EINTR)
-            break;
-        if (poll_result < 0) {
-            fprintf(stderr, "ring buffer 轮询失败: %d\n", poll_result);
-            goto cleanup;
-        }
-        if (deadline_ns && clock_ns(CLOCK_MONOTONIC) >= deadline_ns)
-            break;
+    // 把 events map 绑定到回调函数
+    map = bpf_object__find_map_by_name(obj, "events");
+    if (!map) {
+        fprintf(stderr, "[错误] 找不到 events map\n");
+        err = 1;
+        goto cleanup;
     }
-    result = 0;
+    rb = ring_buffer__new(bpf_map__fd(map), handle_event, NULL, NULL);
+    if (!rb) {
+        fprintf(stderr, "[错误] 创建 ring buffer 失败\n");
+        err = 1;
+        goto cleanup;
+    }
+
+    printf("%-8s %-8s %-16s %s\n", "PID", "UID", "COMM", "FILENAME");
+    printf("按 Ctrl+C 退出\n");
+
+    // ③ poll：每 100ms 轮询一次（兼顾响应速度与加载器自身 CPU 占用）
+    while (!exiting) {
+        err = ring_buffer__poll(rb, 100 /* 毫秒 */);
+        if (err == -EINTR) { err = 0; break; }  // 被信号打断 = 正常退出
+        if (err < 0) {
+            fprintf(stderr, "[错误] ringbuf poll 失败: %d\n", err);
+            break;
+        }
+    }
 
 cleanup:
-    ring_buffer__free(ring);
-    execsnoop_bpf__destroy(skeleton);
-    if (output && output != stdout)
-        fclose(output);
-    return result;
+    ring_buffer__free(rb);
+    bpf_link__destroy(link);
+    bpf_object__close(obj);
+    return err ? 1 : 0;
 }

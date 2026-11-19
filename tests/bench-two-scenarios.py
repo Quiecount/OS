@@ -28,7 +28,7 @@ def run_case(kind, active, trial):
     path = OUT / f"{kind}-{trial}-{'on' if active else 'off'}.jsonl"
     if active:
         path.unlink(missing_ok=True)
-        binary = "syscallhot" if kind == "syscall" else "cpuwatch"
+        binary = "syscall_hotspot" if kind == "syscall" else "cpu_hog"
         with path.with_suffix(".log").open("w") as stream:
             monitor = subprocess.Popen(
                 [str(ROOT / "build" / binary), "--duration", str(seconds + 2),

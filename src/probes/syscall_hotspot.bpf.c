@@ -71,6 +71,7 @@ int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
         return 0;
     stats = bpf_map_lookup_elem(&syscall_totals, &key);
     if (!stats) {
+        zero.uid = (unsigned int)bpf_get_current_uid_gid();
         bpf_get_current_comm(zero.comm, sizeof(zero.comm));
         bpf_map_update_elem(&syscall_totals, &key, &zero, BPF_NOEXIST);
         stats = bpf_map_lookup_elem(&syscall_totals, &key);

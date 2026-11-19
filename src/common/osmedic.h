@@ -49,6 +49,7 @@ struct syscall_stats {
     unsigned long long calls;
     unsigned long long total_ns;
     unsigned long long buckets[OSMEDIC_HIST_SLOTS];
+    unsigned int uid;
     char comm[OSMEDIC_COMM_LEN];
 };
 
@@ -66,6 +67,7 @@ struct cpu_stats {
     unsigned long long runq_total_ns;
     unsigned long long runq_samples;
     unsigned long long runq_buckets[OSMEDIC_RUNQ_SLOTS];
+    unsigned int uid;
     char comm[OSMEDIC_COMM_LEN];
 };
 

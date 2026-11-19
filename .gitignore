@@ -1,5 +1,6 @@
 # Codely CLI 本地文件（不入库）
 .codely-cli/
+.codely/
 CODELY.md
 
 # 系统与 IDE 垃圾文件
@@ -9,13 +10,12 @@ Thumbs.db
 .vscode/
 .idea/
 
-# 编译产物
+# 编译产物与自动生成文件
 *.o
 *.d
 a.out
 build/
+src/vmlinux.h
 output/
-*.jsonl
-
-# 本地生成的内核类型定义
-vmlinux.h
+__pycache__/
+*.pyc

@@ -12,7 +12,7 @@
 #include <bpf/libbpf.h>
 #include "monitor_util.h"
 #include "osmedic.h"
-#include "syscallhot.skel.h"
+#include "syscall_hotspot.skel.h"
 
 #define MAX_ROWS 4096
 
@@ -76,6 +76,7 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
         }
     }
     qsort(rows, n, sizeof(*rows), by_calls_desc);
+    uint64_t ts_ns = monitor_now_ns(CLOCK_MONOTONIC);
     for (size_t i = 0; i < n && i < top; ++i) {
         struct row *r = &rows[i];
         double rate = r->value.calls / seconds;
@@ -85,19 +86,25 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                                               OSMEDIC_HIST_SLOTS,
                                               r->value.calls);
         r->value.comm[OSMEDIC_COMM_LEN - 1] = '\0';
-        fputs("{\"schema_version\":1,\"event\":\"syscall_metric\",\"window\":{\"start\":", out);
+        fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
+                (unsigned long long)ts_ns, r->key.pid, r->value.uid);
+        monitor_json_string(out, r->value.comm);
+        fprintf(out, ",\"id\":%u,\"schema_version\":1,\"event\":\"syscall_metric\",\"window\":{\"start\":",
+                r->key.syscall_id);
         monitor_json_string(out, start);
         fputs(",\"end\":", out);
         monitor_json_string(out, end);
-        fprintf(out, "},\"pid\":%u,\"comm\":", r->key.pid);
-        monitor_json_string(out, r->value.comm);
-        fprintf(out, ",\"syscall_id\":%u,\"syscall\":", r->key.syscall_id);
+        fputs("},\"syscall\":", out);
         monitor_json_string(out, syscall_name(r->key.syscall_id));
         fprintf(out, ",\"calls\":%llu,\"rate_per_sec\":%.2f,\"mean_us\":%.2f,\"p99_upper_us\":%llu}\n",
                 r->value.calls, rate, mean_us, p99);
         if (rate < min_rate || rate < baseline_rate * 10.0)
             continue;
-        fputs("{\"schema_version\":1,\"event\":\"diagnosis\",\"type\":\"SYSCALL_HOTSPOT\",\"window\":{\"start\":", out);
+        fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
+                (unsigned long long)ts_ns, r->key.pid, r->value.uid);
+        monitor_json_string(out, r->value.comm);
+        fprintf(out, ",\"id\":%u,\"schema_version\":1,\"event\":\"diagnosis\",\"type\":\"SYSCALL_HOTSPOT\",\"window\":{\"start\":",
+                r->key.syscall_id);
         monitor_json_string(out, start);
         fputs(",\"end\":", out);
         monitor_json_string(out, end);
@@ -107,8 +114,8 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
         fprintf(out, "},{\"kind\":\"syscall\",\"id\":%u,\"name\":",
                 r->key.syscall_id);
         monitor_json_string(out, syscall_name(r->key.syscall_id));
-        fprintf(out, "}],\"key_metrics\":{\"rate_per_sec\":%.2f,\"baseline_rate_per_sec\":%.2f,\"mean_us\":%.2f,\"p99_upper_us\":%llu},",
-                rate, baseline_rate, mean_us, p99);
+        fprintf(out, "}],\"key_metrics\":{\"calls_per_sec\":%.2f,\"baseline_calls_per_sec\":%.2f,\"top_syscall_id\":%u,\"top_pid\":%u,\"mean_us\":%.2f,\"p99_upper_us\":%llu},",
+                rate, baseline_rate, r->key.syscall_id, r->key.pid, mean_us, p99);
         fputs("\"suspected_root_cause\":\"进程频繁执行同一系统调用\",\"evidence_chain\":[\"该进程/系统调用组合进入当前窗口 Top-N\",\"调用频率超过配置基线的 10 倍\"],\"recommendation\":[\"检查高频调用路径并考虑批处理或缓存\"]}\n", out);
     }
     fflush(out);
@@ -145,7 +152,7 @@ int main(int argc, char **argv)
     const char *path = "-";
     unsigned int interval = 1, duration = 0, top = 10;
     double baseline_rate = 1000, min_rate = 1000;
-    struct syscallhot_bpf *skel = NULL;
+    struct syscall_hotspot_bpf *skel = NULL;
     FILE *out = stdout;
     char start[48], end[48];
     uint64_t begin, last;
@@ -166,7 +173,7 @@ int main(int argc, char **argv)
             break;
         }
         case 'h':
-            fputs("syscallhot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S]\n", stderr);
+            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S]\n", stderr);
             return 0;
         default: return 2;
         }
@@ -178,14 +185,14 @@ int main(int argc, char **argv)
     }
     signal(SIGINT, monitor_signal);
     signal(SIGTERM, monitor_signal);
-    skel = syscallhot_bpf__open();
+    skel = syscall_hotspot_bpf__open();
     if (!skel) goto done;
     skel->rodata->ignored_pid = getpid();
-    if (syscallhot_bpf__load(skel) || syscallhot_bpf__attach(skel)) {
+    if (syscall_hotspot_bpf__load(skel) || syscall_hotspot_bpf__attach(skel)) {
         fputs("无法加载或挂载 syscall raw tracepoint（需要 root 和内核 BTF）。\n", stderr);
         goto done;
     }
-    fprintf(stderr, "syscallhot 已启动；每 %u 秒汇总，基线 %.0f 次/秒。\n", interval, baseline_rate);
+    fprintf(stderr, "syscall_hotspot 已启动；每 %u 秒汇总，基线 %.0f 次/秒。\n", interval, baseline_rate);
     begin = last = monitor_now_ns(CLOCK_MONOTONIC);
     monitor_timestamp(start, sizeof(start));
     while (!monitor_stop) {
@@ -204,7 +211,7 @@ int main(int argc, char **argv)
     }
     result = 0;
 done:
-    syscallhot_bpf__destroy(skel);
+    syscall_hotspot_bpf__destroy(skel);
     if (out != stdout) fclose(out);
     return result;
 }
