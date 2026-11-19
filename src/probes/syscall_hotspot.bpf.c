@@ -36,15 +36,24 @@ SEC("raw_tp/sys_enter")
 int trace_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 {
     unsigned long long tid = bpf_get_current_pid_tgid();
-    struct syscall_start start = {
-        .started_ns = bpf_ktime_get_ns(),
-        .syscall_id = (unsigned int)ctx->args[1],
-    };
+    struct syscall_start *cached;
 
     /* Avoid observing the monitor's own map syscalls. */
     if ((tid >> 32) == 0 || (tid >> 32) == ignored_pid)
         return 0;
-    bpf_map_update_elem(&syscall_starts, &tid, &start, BPF_ANY);
+    /* A thread cannot execute two syscalls concurrently, even after migration.
+     * Reuse its entry instead of allocating/freeing an LRU node per syscall. */
+    cached = bpf_map_lookup_elem(&syscall_starts, &tid);
+    if (cached) {
+        cached->syscall_id = (unsigned int)ctx->args[1];
+        cached->started_ns = bpf_ktime_get_ns();
+    } else {
+        struct syscall_start start = {
+            .started_ns = bpf_ktime_get_ns(),
+            .syscall_id = (unsigned int)ctx->args[1],
+        };
+        bpf_map_update_elem(&syscall_starts, &tid, &start, BPF_ANY);
+    }
     return 0;
 }
 
@@ -54,23 +63,27 @@ int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
     unsigned long long tid = bpf_get_current_pid_tgid();
     struct syscall_start *start;
     struct syscall_key key = {};
-    struct syscall_stats zero = {};
     struct syscall_stats *stats;
     unsigned long long elapsed;
     unsigned int slot;
 
     (void)ctx;
+    if ((tid >> 32) == 0 || (tid >> 32) == ignored_pid)
+        return 0;
     start = bpf_map_lookup_elem(&syscall_starts, &tid);
-    if (!start)
+    if (!start || !start->started_ns)
         return 0;
     elapsed = bpf_ktime_get_ns() - start->started_ns;
     key.pid = tid >> 32;
     key.syscall_id = start->syscall_id;
-    bpf_map_delete_elem(&syscall_starts, &tid);
+    /* An unmatched exit must never reuse a previous syscall's timestamp. */
+    start->started_ns = 0;
     if (!key.pid)
         return 0;
     stats = bpf_map_lookup_elem(&syscall_totals, &key);
     if (!stats) {
+        /* Initialize the large histogram only on the first call in a window. */
+        struct syscall_stats zero = {};
         zero.uid = (unsigned int)bpf_get_current_uid_gid();
         bpf_get_current_comm(zero.comm, sizeof(zero.comm));
         bpf_map_update_elem(&syscall_totals, &key, &zero, BPF_NOEXIST);
@@ -82,5 +95,14 @@ int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
     __sync_fetch_and_add(&stats->calls, 1);
     __sync_fetch_and_add(&stats->total_ns, elapsed);
     __sync_fetch_and_add(&stats->buckets[slot], 1);
+    return 0;
+}
+
+SEC("raw_tp/sched_process_exit")
+int trace_syscall_task_exit(struct bpf_raw_tracepoint_args *ctx)
+{
+    unsigned long long tid = bpf_get_current_pid_tgid();
+    (void)ctx;
+    bpf_map_delete_elem(&syscall_starts, &tid);
     return 0;
 }
