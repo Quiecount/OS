@@ -19,11 +19,10 @@
 static double slow_us = 10000.0;
 static unsigned int slow_min_samples = 20;
 static int output_histogram;
+static int stats_cpus = 1;
+static int shared_stats;
 
-struct row {
-    struct syscall_key key;
-    struct syscall_stats value;
-};
+#include "window_merge.h"
 
 static const char *syscall_name(unsigned int id)
 {
@@ -53,7 +52,7 @@ static const char *syscall_name(unsigned int id)
 
 static int by_calls_desc(const void *a, const void *b)
 {
-    const struct row *left = a, *right = b;
+    const struct syscall_row *left = a, *right = b;
     return (right->value.calls > left->value.calls) -
            (right->value.calls < left->value.calls);
 }
@@ -95,7 +94,7 @@ static int expected_wait(unsigned int id)
     return 0;
 }
 
-static void emit_slow(FILE *out, const struct row *r, double mean_us,
+static void emit_slow(FILE *out, const struct syscall_row *r, double mean_us,
                       unsigned long long p99, const char *start, const char *end)
 {
     fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
@@ -113,27 +112,43 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                        double baseline_rate, double min_rate,
                        const char *start, const char *end)
 {
-    struct row *rows = calloc(MAX_ROWS, sizeof(*rows));
+    struct syscall_row *rows = calloc(MAX_ROWS, sizeof(*rows));
+    struct syscall_stats *cpu_values = calloc((size_t)stats_cpus, sizeof(*cpu_values));
     size_t n = 0;
-    if (!rows)
+    if (!rows || !cpu_values) {
+        free(rows);
+        free(cpu_values);
         return -1;
+    }
     while (n < MAX_ROWS) {
         struct syscall_key key;
         if (bpf_map_get_next_key(fd, NULL, &key) != 0) {
             if (errno != ENOENT) goto fail;
             break;
         }
-        if (bpf_map_lookup_and_delete_elem(fd, &key, &rows[n].value) == 0) {
+        if (bpf_map_lookup_and_delete_elem(fd, &key, cpu_values) == 0) {
             rows[n].key = key;
+            struct syscall_stats *to = &rows[n].value;
+            for (int cpu = 0; cpu < stats_cpus; ++cpu) {
+                const struct syscall_stats *from = &cpu_values[cpu];
+                if (!from->calls) continue;
+                to->uid = from->uid;
+                memcpy(to->comm, from->comm, sizeof(to->comm));
+                to->calls += from->calls;
+                to->total_ns += from->total_ns;
+                for (unsigned int j = 0; j < OSMEDIC_HIST_SLOTS; ++j)
+                    to->buckets[j] += from->buckets[j];
+            }
             ++n;
         } else if (errno != ENOENT) {
             goto fail;
         }
     }
+    n = merge_syscall_rows(rows, n);
     qsort(rows, n, sizeof(*rows), by_calls_desc);
     uint64_t ts_ns = monitor_now_ns(CLOCK_MONOTONIC);
     for (size_t i = 0; i < n; ++i) {
-        struct row *r = &rows[i];
+        struct syscall_row *r = &rows[i];
         double rate = r->value.calls / seconds;
         double mean_us = r->value.calls ?
             (double)r->value.total_ns / r->value.calls / 1000.0 : 0;
@@ -185,10 +200,12 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
         fputs("\"suspected_root_cause\":\"进程频繁执行同一系统调用\",\"evidence_chain\":[\"该进程/系统调用组合进入当前窗口 Top-N\",\"调用频率超过配置基线的 10 倍\"],\"recommendation\":[\"检查高频调用路径并考虑批处理或缓存\"]}\n", out);
     }
     fflush(out);
+    free(cpu_values);
     free(rows);
     return 0;
 fail:
     fprintf(stderr, "读取 syscall map 失败: %s\n", strerror(errno));
+    free(cpu_values);
     free(rows);
     return -1;
 }
@@ -215,6 +232,7 @@ int main(int argc, char **argv)
         {"slow-us", required_argument, NULL, 's'},
         {"slow-min-samples", required_argument, NULL, 'n'},
         {"histogram", no_argument, NULL, 'H'},
+        {"shared-stats", no_argument, NULL, 'S'},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0},
     };
@@ -227,7 +245,7 @@ int main(int argc, char **argv)
     uint64_t begin, last;
     int opt, result = 1;
 
-    while ((opt = getopt_long(argc, argv, "o:i:d:t:b:m:s:n:Hh", options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:i:d:t:b:m:s:n:HSh", options, NULL)) != -1) {
         char *endptr;
         switch (opt) {
         case 'o': path = optarg; break;
@@ -246,8 +264,9 @@ int main(int argc, char **argv)
         }
         case 'n': if (parse_positive(optarg, &slow_min_samples)) return 2; break;
         case 'H': output_histogram = 1; break;
+        case 'S': shared_stats = 1; break;
         case 'h':
-            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S] [--slow-us US] [--slow-min-samples N] [--histogram]\n", stderr);
+            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S] [--slow-us US] [--slow-min-samples N] [--histogram] [--shared-stats]\n", stderr);
             return 0;
         default: return 2;
         }
@@ -262,6 +281,13 @@ int main(int argc, char **argv)
     skel = syscall_hotspot_bpf__open();
     if (!skel) goto done;
     skel->rodata->ignored_pid = getpid();
+    if (shared_stats) {
+        skel->rodata->percpu_mode = 0;
+        if (bpf_map__set_type(skel->maps.syscall_totals, BPF_MAP_TYPE_HASH)) goto done;
+    } else {
+        stats_cpus = libbpf_num_possible_cpus();
+        if (stats_cpus <= 0) goto done;
+    }
     if (syscall_hotspot_bpf__load(skel) || syscall_hotspot_bpf__attach(skel)) {
         fputs("无法加载或挂载 syscall raw tracepoint（需要 root 和内核 BTF）。\n", stderr);
         goto done;

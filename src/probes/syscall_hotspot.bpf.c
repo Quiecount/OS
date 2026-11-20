@@ -4,6 +4,7 @@
 
 char LICENSE[] SEC("license") = "GPL";
 const volatile unsigned int ignored_pid = 0;
+const volatile unsigned int percpu_mode = 1;
 static const struct syscall_stats empty_stats = {};
 
 struct syscall_fast {
@@ -25,7 +26,7 @@ struct {
 } syscall_starts SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
     __uint(max_entries, 4096);
     __type(key, struct syscall_key);
     __type(value, struct syscall_stats);
@@ -83,17 +84,25 @@ int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
         /* Read-only template avoids placing a histogram on the BPF stack. */
         bpf_map_update_elem(&syscall_totals, &key, &empty_stats, BPF_NOEXIST);
         stats = bpf_map_lookup_elem(&syscall_totals, &key);
-        if (stats) {
-            stats->uid = (unsigned int)bpf_get_current_uid_gid();
-            bpf_get_current_comm(stats->comm, sizeof(stats->comm));
-        }
     }
     if (!stats)
         return 0;
+    if (!stats->calls) {
+        stats->uid = (unsigned int)bpf_get_current_uid_gid();
+        bpf_get_current_comm(stats->comm, sizeof(stats->comm));
+    }
     slot = latency_bucket(elapsed);
-    __sync_fetch_and_add(&stats->calls, 1);
-    __sync_fetch_and_add(&stats->total_ns, elapsed);
-    __sync_fetch_and_add(&stats->buckets[slot], 1);
+    /* sys_exit is non-migrating and cannot recursively issue another syscall.
+     * Per-CPU counters avoid sharing atomic cache lines between worker CPUs. */
+    if (percpu_mode) {
+        stats->calls++;
+        stats->total_ns += elapsed;
+        stats->buckets[slot]++;
+    } else {
+        __sync_fetch_and_add(&stats->calls, 1);
+        __sync_fetch_and_add(&stats->total_ns, elapsed);
+        __sync_fetch_and_add(&stats->buckets[slot], 1);
+    }
     return 0;
 }
 

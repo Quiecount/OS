@@ -53,7 +53,7 @@ SEC("raw_tp/sched_switch") int change(struct bpf_raw_tracepoint_args *ctx)
     unsigned long long now = bpf_ktime_get_ns();
     if (BPF_CORE_READ(prev, tgid) == target_pid) {
         bpf_map_update_elem(&stopped, &a, &now, BPF_ANY);
-        if (BPF_CORE_READ(prev, __state) == 0) bpf_map_update_elem(&ready, &a, &now, BPF_ANY);
+        if (ctx->args[0] || ctx->args[3] == 0) bpf_map_update_elem(&ready, &a, &now, BPF_ANY);
     }
     if (BPF_CORE_READ(next, tgid) == target_pid) {
         unsigned long long *start = bpf_map_lookup_elem(&stopped, &b);

@@ -107,9 +107,10 @@ int trace_sched_switch(struct bpf_raw_tracepoint_args *ctx)
         bpf_map_delete_elem(&offcpu, &next_tid);
     }
 
-    /* TASK_RUNNING (0) means the switched-out task is waiting for a CPU. */
+    /* Linux 6.6 supplies the state snapshot as arg 3. Preemption keeps
+     * the task runnable even when its mutable task state is nonzero. */
     if (prev_tid && prev_pid && prev_pid != ignored_pid &&
-        BPF_CORE_READ(prev, __state) == 0) {
+        (ctx->args[0] || ctx->args[3] == 0)) {
         now_queued.queued_ns = now;
         bpf_map_update_elem(&queued, &prev_tid, &now_queued, BPF_ANY);
     }
@@ -128,5 +129,15 @@ int trace_sched_switch(struct bpf_raw_tracepoint_args *ctx)
         }
         bpf_map_delete_elem(&queued, &next_tid);
     }
+    return 0;
+}
+
+SEC("raw_tp/sched_process_exit")
+int trace_sched_exit(struct bpf_raw_tracepoint_args *ctx)
+{
+    (void)ctx;
+    unsigned int tid = (unsigned int)bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&queued, &tid);
+    bpf_map_delete_elem(&offcpu, &tid);
     return 0;
 }

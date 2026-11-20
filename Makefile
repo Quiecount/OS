@@ -23,8 +23,20 @@ FAULT_BINS := $(BUILD)/syscall_bomb $(BUILD)/lock_contention
 
 all: $(BPF_OBJS) $(BUILD)/execsnoop $(BUILD)/syscall_hotspot $(BUILD)/cpu_hog $(FAULT_BINS)
 
-.PHONY: quality-tools
-quality-tools: check $(BUILD)/quality-workload $(BUILD)/quality-reference
+.PHONY: quality-tools quality-unit
+quality-tools: check $(BUILD)/quality-workload $(BUILD)/quality-reference quality-unit
+
+quality-unit: $(BUILD)/test-window-merge $(BUILD)/test-latency-hist
+	./$(BUILD)/test-window-merge
+	./$(BUILD)/test-latency-hist
+
+$(BUILD)/test-window-merge: tests/test-window-merge.c src/common/window_merge.h src/common/osmedic.h src/common/latency_hist.h
+	@mkdir -p $(BUILD)
+	$(CC) $(USER_CFLAGS) -Isrc/common $< -o $@
+
+$(BUILD)/test-latency-hist: tests/test-latency-hist.c src/common/latency_hist.h
+	@mkdir -p $(BUILD)
+	$(CC) $(USER_CFLAGS) -Isrc/common $< -o $@
 
 $(BUILD)/quality-workload: tests/quality-workload.c
 	$(CC) $(USER_CFLAGS) -pthread $< -o $@
@@ -44,7 +56,7 @@ $(BUILD)/%.bpf.o: src/probes/%.bpf.c src/events.h src/vmlinux.h src/common/osmed
 $(BUILD)/%.skel.h: $(BUILD)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
-$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h src/common/proc_cpu.h src/common/latency_hist.h
+$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h src/common/proc_cpu.h src/common/latency_hist.h src/common/window_merge.h
 	$(CC) $(USER_CFLAGS) -I$(BUILD) -Isrc -Isrc/common $< -o $@ $(USER_LIBS)
 
 # 探针① 的用户态加载器（其余场景加载器按此模板在阶段 2 补齐）

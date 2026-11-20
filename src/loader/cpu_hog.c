@@ -16,10 +16,7 @@
 
 #define MAX_ROWS 4096
 
-struct row {
-    unsigned int pid;
-    struct cpu_stats stats;
-};
+#include "window_merge.h"
 
 #include "proc_cpu.h"
 
@@ -44,12 +41,12 @@ static struct streak *find_streak(unsigned int pid)
 
 static int by_runtime_desc(const void *a, const void *b)
 {
-    const struct row *left = a, *right = b;
+    const struct cpu_row *left = a, *right = b;
     return (right->stats.runtime_ns > left->stats.runtime_ns) -
            (right->stats.runtime_ns < left->stats.runtime_ns);
 }
 
-static void emit_cpu_hog(FILE *out, const struct row *r, double cpu_pct,
+static void emit_cpu_hog(FILE *out, const struct cpu_row *r, double cpu_pct,
                          double streak, const char *start, const char *end)
 {
     fprintf(out, "{\"scene\":\"cpu\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
@@ -70,7 +67,7 @@ static void emit_cpu_hog(FILE *out, const struct row *r, double cpu_pct,
 static void emit_sched_delay(FILE *out, unsigned long long p99,
                              unsigned long long samples,
                              unsigned long long baseline_us,
-                             const struct row *top_waiter,
+                             const struct cpu_row *top_waiter,
                              const char *start, const char *end)
 {
     fprintf(out, "{\"scene\":\"cpu\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
@@ -86,17 +83,16 @@ static void emit_sched_delay(FILE *out, unsigned long long p99,
     monitor_json_string(out, top_waiter->stats.comm);
     fprintf(out, "}],\"key_metrics\":{\"runqlat_p99_ns\":%llu,\"baseline_p99_ns\":%llu,\"samples\":%llu},",
             p99 * 1000, baseline_us * 1000, samples);
-    fputs("\"suspected_root_cause\":\"CPU 运行队列等待显著升高\",\"evidence_chain\":[\"sched_wakeup/sched_switch 等待时间 P99 超过配置基线的 5 倍\",\"窗口内至少有 20 次等待样本\"],\"recommendation\":[\"检查 CPU 饱和及高优先级线程\"]}\n", out);
+    fputs("\"suspected_root_cause\":\"CPU 运行队列等待显著升高\",\"evidence_chain\":[\"该进程 sched_wakeup/sched_switch 等待时间 P99 超过配置基线的 5 倍\",\"窗口内至少有 20 次等待样本\"],\"recommendation\":[\"检查 CPU 饱和及高优先级线程\"]}\n", out);
 }
 
 static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                        unsigned long long baseline_us,
                        const char *start, const char *end)
 {
-    struct row *rows = calloc(MAX_ROWS, sizeof(*rows));
+    struct cpu_row *rows = calloc(MAX_ROWS, sizeof(*rows));
     unsigned long long global_buckets[OSMEDIC_RUNQ_SLOTS] = {};
     unsigned long long global_samples = 0;
-    const struct row *top_waiter = NULL;
     size_t n = 0;
     if (!rows) return -1;
     for (size_t i = 0; i < MAX_ROWS; ++i) streaks[i].seen = false;
@@ -111,10 +107,11 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
             ++n;
         } else if (errno != ENOENT) goto fail;
     }
+    n = merge_cpu_rows(rows, n);
     if (sample_process_cpu(rows, &n)) goto fail;
     qsort(rows, n, sizeof(*rows), by_runtime_desc);
     for (size_t i = 0; i < n; ++i) {
-        struct row *r = &rows[i];
+        struct cpu_row *r = &rows[i];
         double cpu_pct = r->stats.runtime_ns / (seconds * 10000000.0);
         unsigned long long p99 = monitor_p99(r->stats.runq_buckets,
                                               OSMEDIC_RUNQ_SLOTS,
@@ -124,8 +121,6 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
         for (unsigned int j = 0; j < OSMEDIC_RUNQ_SLOTS; ++j)
             global_buckets[j] += r->stats.runq_buckets[j];
         global_samples += r->stats.runq_samples;
-        if (!top_waiter || r->stats.runq_total_ns > top_waiter->stats.runq_total_ns)
-            top_waiter = r;
         if (s) {
             s->seen = true;
             if (cpu_pct > 80.0) s->seconds += seconds;
@@ -147,6 +142,8 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                 fprintf(out, "%s%llu", j ? "," : "", r->stats.runq_buckets[j]);
             fputs("]}\n", out);
         }
+        if (r->stats.runq_samples >= 20 && p99 > baseline_us * 5)
+            emit_sched_delay(out, p99, r->stats.runq_samples, baseline_us, r, start, end);
         if (s && s->seconds >= 10.0 && cpu_pct > 80.0)
             emit_cpu_hog(out, r, cpu_pct, s->seconds, start, end);
     }
@@ -162,9 +159,6 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
     monitor_json_string(out, end);
     fprintf(out, "},\"runq_samples\":%llu,\"runq_p99_upper_us\":%llu}\n",
             global_samples, p99);
-    if (global_samples >= 20 && top_waiter && p99 > baseline_us * 5)
-        emit_sched_delay(out, p99, global_samples, baseline_us, top_waiter,
-                         start, end);
     fflush(out);
     free(rows);
     return 0;
@@ -231,7 +225,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "cpu_hog 已启动；每 %u 秒汇总，runqlat P99 基线 %u us。\n",
             interval, baseline);
     begin = last = monitor_now_ns(CLOCK_MONOTONIC);
-    struct row *initial = calloc(MAX_ROWS, sizeof(*initial));
+    struct cpu_row *initial = calloc(MAX_ROWS, sizeof(*initial));
     size_t initial_count = 0;
     if (!initial) goto done;
     int sampled = sample_process_cpu(initial, &initial_count);

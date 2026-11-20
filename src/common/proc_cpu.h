@@ -14,7 +14,7 @@ struct proc_cpu_sample {
 static struct proc_cpu_sample proc_samples[MAX_ROWS];
 static unsigned long long proc_previous_ticks;
 
-static int sample_process_cpu(struct row *rows, size_t *n)
+static int sample_process_cpu(struct cpu_row *rows, size_t *n)
 {
     DIR *dir = opendir("/proc");
     struct dirent *entry;
