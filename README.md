@@ -73,7 +73,7 @@ test.sh             # 一键测试入口（转调 tests/test.sh）
 |---|---|---|
 | 0 | 环境搭建 + 第一支探针 | :construction: 进行中 |
 | 1 | libbpf 探针基础 | :hourglass: 待开始 |
-| 2 | 五场景逐个攻坚 | :construction: 场景 1–2 已实现，等待 root 端到端验收；其余待开发 |
+| 2 | 五场景逐个攻坚 | :construction: 场景 1–2 已实现并完成首轮质量长测，修复与优化中；其余待开发 |
 | 3 | 诊断引擎 + 结构化输出 | :hourglass: 待开始 |
 | 4 | LLM 报告层 | :hourglass: 待开始 |
 | 5 | 性能开销评测 + 一键复现 + 文档 + 视频 | :hourglass: 待开始 |
@@ -102,6 +102,25 @@ sudo python3 tests/bench-two-scenarios.py
 ```
 
 两支加载器按窗口输出 JSON Lines；规则命中时额外输出 `diagnosis` 行。`python3 analysis/collector.py --input output/syscall.jsonl` 将其汇总为七字段报告。阈值默认值是可配置的工程起点，需用同机正常负载校准。设计、复现和开销评测口径见 [docs/场景1-2_实现与性能评测.md](docs/场景1-2_实现与性能评测.md)。
+
+场景 1–2 的分场景目标、完整测量结果与后续修复记录分别见：
+
+- [建议验收目标](docs/场景1-2_分场景验收目标.md)：5% 等数字是项目建议，不是赛方优秀线。
+- [完整评测结果](docs/场景1-2_完整评测结果.md)：包括未达标项和测试覆盖限制。
+- [质量评测执行记录](docs/场景1-2_质量评测执行记录.md)：版本变化、参考探针和复现步骤。
+
+```bash
+make quality-tools                         # 编译并运行用户态回归
+sudo python3 tests/quality-evaluate.py --profile smoke
+sudo bash tests/run-quality-repair.sh       # 后台修复回归，约 15 分钟
+python3 tests/quality-status.py             # 只读进度
+# 确认短回归结果后，完整评测约 2–3 小时：
+sudo bash tests/run-quality-batch.sh
+# 从某次保存的 report.json 生成可读结果：
+python3 tests/quality-summary.py output/quality/某次目录/report.json
+```
+
+`syscall_hotspot --slow-us 10000 --slow-min-samples 20` 配置独立慢调用告警；`--histogram` 输出用于准确度对照的细分桶，`--shared-stats` 切换共享统计模式。off-CPU 当前统计已完成的切出→切入区间，不是实时等待使用率。完整评测尚未证明两个模块全部达到建议优秀目标。
 
 ## 演示视频
 
