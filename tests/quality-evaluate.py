@@ -20,10 +20,11 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
-parser.add_argument("--profile", choices=("smoke", "full"), default="smoke")
+parser.add_argument("--profile", choices=("smoke", "regression", "full"), default="smoke")
 parser.add_argument("--phases", default="count,accuracy,diagnosis,performance,soak")
 args = parser.parse_args()
 FULL = args.profile == "full"
+REGRESSION = args.profile == "regression"
 OUT = ROOT / "output/quality" / (dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + args.profile)
 REPORT = {"profile": args.profile, "kernel": os.uname().release,
           "logical_cpus": os.cpu_count(),
@@ -62,7 +63,7 @@ def run_case(label, mode, seconds, threads=1, rate=0, duty=100,
     processes, streams, monitors, observations = [], [], {}, {}
     done = threading.Event()
     watcher = None
-    result = {"label": label, "mode": mode, "seconds": seconds, "threads": threads, "rate": rate, "duty": duty}
+    result = {"label": label, "mode": mode, "seconds": seconds, "threads": threads, "rate": rate, "duty": duty, "top": top}
     try:
         workload = subprocess.Popen([str(ROOT / "build/quality-workload"), mode, str(seconds),
                                      str(threads), str(rate), str(duty)], stdin=subprocess.PIPE,
@@ -129,6 +130,12 @@ def run_case(label, mode, seconds, threads=1, rate=0, duty=100,
         rows = {scene: [json.loads(line) for line in (folder / f"{scene}.jsonl").read_text().splitlines()]
                 for scene in scenes}
         selected = {scene: [r for r in data if r.get("pid") == pid] for scene, data in rows.items()}
+        # Regression for fragmented drain rows: one metric per object/window.
+        for scene, data in selected.items():
+            keys = [(r["event"], r.get("id"), r["window"]["start"], r["window"]["end"])
+                    for r in data if r["event"] in ("cpu_metric", "syscall_metric")]
+            if len(keys) != len(set(keys)):
+                raise RuntimeError(f"duplicate {scene} metric for the same object/window")
         result.update(pid=pid, actual_duration_s=(ground["end_ns"] - ground["start_ns"]) / 1e9,
                       calls=ground["calls"], resources={})
         for scene, values in observations.items():
@@ -140,7 +147,7 @@ def run_case(label, mode, seconds, threads=1, rate=0, duty=100,
             for row in data:
                 if row.get("event") == "diagnosis":
                     result["diagnoses"].append({"type": row["type"], "after_start_s": (row["ts_ns"] - ground["start_ns"]) / 1e9})
-        if mode in ("getpid", "stat", "open") and "syscall" in selected:
+        if mode in ("getpid", "stat", "open") and "syscall" in selected and top == 4096:
             ids = [identity[mode]] + ([identity["close"]] if mode == "open" else [])
             result["count_checks"] = []
             for syscall_id in ids:
@@ -182,10 +189,11 @@ def run_case(label, mode, seconds, threads=1, rate=0, duty=100,
             metrics = [r for r in selected["cpu"] if r.get("event") == "cpu_metric"]
             # Use an interior interval >=5 seconds; reference is CLOCK_PROCESS_CPUTIME_ID.
             valid = [r for r in metrics if points and points[0][0]+1.2e9 <= r["ts_ns"] <= points[-1][0]]
-            if len(valid) >= 6:
+            if len(valid) >= 6 and valid[-1]["ts_ns"] - valid[0]["ts_ns"] >= 5e9:
                 start_ns, end_ns = valid[0]["ts_ns"], valid[-1]["ts_ns"]
                 reference_cpu = 100*(interpolate(points, end_ns)-interpolate(points, start_ns))/(end_ns-start_ns)
-                measured_cpu = statistics.mean(r["cpu_percent_one_core"] for r in valid[1:])
+                measured_cpu = sum(b["cpu_percent_one_core"] * (b["ts_ns"]-a["ts_ns"])
+                                   for a,b in zip(valid, valid[1:])) / (end_ns-start_ns)
                 result["cpu_accuracy"] = {"reference_percent": reference_cpu, "measured_percent": measured_cpu,
                     "error_percentage_points": abs(measured_cpu-reference_cpu), "target_met": abs(measured_cpu-reference_cpu) <= 2}
         result["execution"] = "passed"
@@ -236,7 +244,8 @@ def diagnosis_trials():
     results = {}
     for alert in ("SYSCALL_HOTSPOT", "SYSCALL_SLOW", "CPU_HOG", "SCHED_DELAY"):
         stats = {"positive": 0, "detected": 0, "timely": 0, "negative": 0, "false_positives": 0, "execution_errors": 0}
-        for positive, trials in ((True, 100 if FULL else 1), (False, 200 if FULL else 1)):
+        for positive, trials in ((True, 100 if FULL else (10 if REGRESSION else 1)),
+                                 (False, 200 if FULL else (20 if REGRESSION else 1))):
             for i in range(trials):
                 if alert == "SYSCALL_HOTSPOT":
                     options = dict(mode=("getpid", "stat", "open")[i%3], seconds=3 if positive else 2, rate=50000 if positive else 1000)
@@ -281,9 +290,9 @@ def performance():
     results={}
     for scene in ("syscall", "cpu"):
         runs={"off":[],"on":[]}
-        for trial in range(10 if FULL else 2):
+        for trial in range(10 if FULL else (6 if REGRESSION else 2)):
             for active in ([False,True] if trial%2==0 else [True,False]):
-                runs["on" if active else "off"].append(bench.run_case(scene, active, trial, seconds=30 if FULL else 3))
+                runs["on" if active else "off"].append(bench.run_case(scene, active, trial, seconds=30 if FULL else (10 if REGRESSION else 3)))
             REPORT["performance_progress"]={"scene":scene,"completed_pairs":trial+1}; save()
         med={k:statistics.median(r["throughput_per_s"] for r in v) for k,v in runs.items()}
         loss=100*(1-med["on"]/med["off"])
@@ -300,11 +309,14 @@ def main():
     if os.geteuid()!=0: raise SystemExit("Run with sudo/root")
     OUT.mkdir(parents=True)
     (ROOT/"output/quality/latest.txt").write_text(str(OUT)+"\n")
-    for file in sorted((ROOT/"src").rglob("*")):
-        if file.is_file() and file.name != "vmlinux.h":
+    for file in sorted([*(ROOT/"src").rglob("*"), *(ROOT/"tests").glob("*"), ROOT/"Makefile"]):
+        if file.is_file() and file.name != "vmlinux.h" and file.suffix not in (".pyc",):
             REPORT["sha256"][str(file.relative_to(ROOT))]=hashlib.sha256(file.read_bytes()).hexdigest()
     save()
     subprocess.run(["make","quality-tools"],cwd=ROOT,check=True)
+    REPORT["binary_sha256"] = {name: hashlib.sha256((ROOT/"build"/name).read_bytes()).hexdigest()
+                               for name in ("syscall_hotspot", "cpu_hog", "quality-reference", "quality-workload")}
+    save()
     for phase in args.phases.split(","):
         began=time.monotonic()
         REPORT["active_phase"]=phase; save(); print(f"PHASE {phase}",flush=True)
@@ -313,14 +325,20 @@ def main():
                 results=[]
                 for mode in ("getpid","stat","open"):
                     for threads in (1,4,8):
-                        for rate in ((10000,100000,200000) if FULL else (10000,)):
+                        for rate in ((10000,100000,200000) if FULL or REGRESSION else (10000,)):
                             results.append(run_case(f"count-{mode}-{threads}-{rate}",mode,5 if FULL else 2,threads,rate))
             elif phase=="accuracy":
                 results=[]
                 for mode in ("getpid","stat","read","sleep"):
-                    results.append(run_case(f"latency-{mode}",mode,30 if FULL else 4,rate=10000,reference=True,scenes=("syscall","cpu")))
-                for duty in ((20,50,75,85,100) if FULL else (20,100)):
+                    results.append(run_case(f"latency-{mode}",mode,30 if FULL else (10 if REGRESSION else 4),rate=10000,reference=True,scenes=("syscall","cpu")))
+                for duty in ((20,50,75,85,100) if FULL or REGRESSION else (20,100)):
                     results.append(run_case(f"cpu-accuracy-{duty}","cpu",10,duty=duty,scenes=("cpu",)))
+                if REGRESSION:
+                    for threads in (4,8):
+                        results.append(run_case(f"cpu-accuracy-multithread-{threads}","cpu",12,threads=threads,scenes=("cpu",)))
+                    for threads in (1,4,8):
+                        results.append(run_case(f"shared-count-{threads}","getpid",3,threads=threads,rate=100000,
+                                                extra={"syscall":["--shared-stats"]}))
             elif phase=="diagnosis": results=diagnosis_trials()
             elif phase=="performance": results=performance()
             elif phase=="soak":

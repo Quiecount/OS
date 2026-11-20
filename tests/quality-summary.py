@@ -73,7 +73,7 @@ def summarize(report):
         enough = full and x["positive"] == 100 and x["negative"] == 200
         ok = enough and not x["execution_errors"] and x["detected"] >= 98 and x["false_positives"] <= 2
         rows.append([alert, f"{x['detected']}/{x['positive']}", f"{x['false_positives']}/{x['negative']}",
-                     f"{x['timely']}/{x['positive']}", verdict(ok) if enough else "未完成"])
+                     f"{x['timely']}/{x['positive']}", verdict(ok) if enough else "样本不足，未作完整判定"])
     section("告警检出和误报", ["告警", "检出 / 异常试验", "误报 / 正常试验", "时限内 / 异常试验", "98% / 1% 经验比例目标"], rows)
     lines.extend(["热点、慢调用、调度延迟时限为负载启动后 2 秒；CPU_HOG 为启动后 12 秒（含 10 秒持续条件）。仅评价预先指定的测试进程，未标注的系统进程不计入误报分母。有限合成样本的经验比例不等于真实业务总体成功率；完整 JSON 保留 Wilson 95% 区间。", ""])
     perf = phases.get("performance", {}).get("results", {})
@@ -83,8 +83,9 @@ def summarize(report):
         if not x:
             rows.append([scene, "未完成", "未完成", "未完成", f"≤{threshold}%", "未完成"])
         else:
+            conclusion = verdict(x["target_met"]) if x.get("sufficient_sample_size") else "短回归，未作完整判定"
             rows.append([scene, len(x["runs"]["on"]), f"{x['throughput_loss_percent']:.3f}%",
-                         f"{100*x['baseline_cv']:.3f}%", f"≤{threshold}%", verdict(x["target_met"])])
+                         f"{100*x['baseline_cv']:.3f}%", f"≤{threshold}%", conclusion])
     section("分场景吞吐开销", ["探针", "配对数", "吞吐损失", "基线变异系数", "目标", "结论"], rows)
     lines.extend(["损失=100×(1−开启吞吐中位数/关闭吞吐中位数)。负值按实验噪声解释；基线变异系数超过 5% 时不认定性能达标。完整配置每场景 10 对、每段 30 秒。", ""])
     resources = []
@@ -108,7 +109,10 @@ def summarize(report):
     section("长时间稳定性覆盖", ["负载", "已完成实际秒数", "执行结果", "计数最大误差"], [
         [c["mode"], f"{c.get('actual_duration_s', 0):.2f}", c["execution"],
          f"{max(x['error_percent'] for x in c['count_checks']):.6f}%" if c.get("count_checks") else "未生成"] for c in soak])
-    lines.extend(["本轮计划 getpid/stat/open 各 10 分钟，共 30 分钟，两个探针同时开启。这不等于每种线程数、每种负载组合都通过 30 分钟；也未覆盖高进程基数 map 饱和。", ""])
+    if "soak" in phases:
+        lines.extend(["完整配置为 getpid/stat/open 各 10 分钟，共 30 分钟，两个探针同时开启；smoke 配置每种仅 3 秒。以表中实际时长为准，不等于每个线程数与负载组合完成 30 分钟，也未覆盖高进程基数 map 饱和。", ""])
+    else:
+        lines.extend(["本轮未执行长时间稳定性阶段。旧版本的长测结果不能替代本版本验证。", ""])
     errors = [f"- {c['label']}: {c.get('error', 'unknown')}" for c in cases if c["execution"] != "passed"]
     errors += [f"- {name}: {phase.get('error', 'unknown')}" for name, phase in phases.items() if phase["execution"] == "failed"]
     lines.extend(["## 执行错误", "", *(errors or ["已完成部分未记录执行错误。"]), ""])
