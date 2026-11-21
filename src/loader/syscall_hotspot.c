@@ -21,6 +21,7 @@ static unsigned int slow_min_samples = 20;
 static int output_histogram;
 static int stats_cpus = 1;
 static int shared_stats;
+static int cached_exit_identity;
 
 #include "window_merge.h"
 
@@ -233,6 +234,7 @@ int main(int argc, char **argv)
         {"slow-min-samples", required_argument, NULL, 'n'},
         {"histogram", no_argument, NULL, 'H'},
         {"shared-stats", no_argument, NULL, 'S'},
+        {"cached-exit", no_argument, NULL, 'C'},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0},
     };
@@ -245,7 +247,7 @@ int main(int argc, char **argv)
     uint64_t begin, last;
     int opt, result = 1;
 
-    while ((opt = getopt_long(argc, argv, "o:i:d:t:b:m:s:n:HSh", options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:i:d:t:b:m:s:n:HShC", options, NULL)) != -1) {
         char *endptr;
         switch (opt) {
         case 'o': path = optarg; break;
@@ -265,8 +267,9 @@ int main(int argc, char **argv)
         case 'n': if (parse_positive(optarg, &slow_min_samples)) return 2; break;
         case 'H': output_histogram = 1; break;
         case 'S': shared_stats = 1; break;
+        case 'C': cached_exit_identity = 1; break;
         case 'h':
-            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S] [--slow-us US] [--slow-min-samples N] [--histogram] [--shared-stats]\n", stderr);
+            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S] [--slow-us US] [--slow-min-samples N] [--histogram] [--shared-stats] [--cached-exit (experimental)]\n", stderr);
             return 0;
         default: return 2;
         }
@@ -281,6 +284,7 @@ int main(int argc, char **argv)
     skel = syscall_hotspot_bpf__open();
     if (!skel) goto done;
     skel->rodata->ignored_pid = getpid();
+    skel->rodata->cached_exit_identity = cached_exit_identity;
     if (shared_stats) {
         skel->rodata->percpu_mode = 0;
         if (bpf_map__set_type(skel->maps.syscall_totals, BPF_MAP_TYPE_HASH)) goto done;

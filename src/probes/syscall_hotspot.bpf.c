@@ -5,6 +5,8 @@
 char LICENSE[] SEC("license") = "GPL";
 const volatile unsigned int ignored_pid = 0;
 const volatile unsigned int percpu_mode = 1;
+/* Opt-in experiment: sched_switch invalidates this CPU's active timestamp. */
+const volatile unsigned int cached_exit_identity = 0;
 static const struct syscall_stats empty_stats = {};
 
 struct syscall_fast {
@@ -55,7 +57,7 @@ int trace_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 SEC("raw_tp/sys_exit")
 int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
 {
-    unsigned long long tid = bpf_get_current_pid_tgid();
+    unsigned long long tid;
     struct syscall_start *start;
     struct syscall_key key = {};
     struct syscall_stats *stats;
@@ -64,9 +66,16 @@ int trace_sys_exit(struct bpf_raw_tracepoint_args *ctx)
     unsigned int zero = 0;
 
     (void)ctx;
+    struct syscall_fast *cached = bpf_map_lookup_elem(&fast_start, &zero);
+    /* An active cache necessarily belongs to the current task: switching out
+     * spills and invalidates it, and sys_enter records the new identity.
+     * Only the suspended/migrated path needs to read the task identity again. */
+    if (cached_exit_identity && cached && cached->start.started_ns)
+        tid = cached->tid;
+    else
+        tid = bpf_get_current_pid_tgid();
     if ((tid >> 32) == 0 || (tid >> 32) == ignored_pid)
         return 0;
-    struct syscall_fast *cached = bpf_map_lookup_elem(&fast_start, &zero);
     int fast = cached && cached->tid == tid && cached->start.started_ns;
     start = fast ? &cached->start : bpf_map_lookup_elem(&syscall_starts, &tid);
     if (!start || !start->started_ns)
