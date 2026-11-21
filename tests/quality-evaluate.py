@@ -22,14 +22,22 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--profile", choices=("smoke", "regression", "full"), default="smoke")
 parser.add_argument("--phases", default="count,accuracy,diagnosis,performance,soak")
+parser.add_argument("--alerts", default="SYSCALL_HOTSPOT,SYSCALL_SLOW,CPU_HOG,SCHED_DELAY")
+parser.add_argument("--cached-exit", action="store_true", help="Test the opt-in syscall fast exit identity")
+parser.add_argument("--require-accuracy", action="store_true", help="Fail exit status on generated accuracy checks exceeding their targets")
 args = parser.parse_args()
+ALERTS = args.alerts.split(",")
+if not ALERTS or len(ALERTS) != len(set(ALERTS)) or any(x not in
+        ("SYSCALL_HOTSPOT", "SYSCALL_SLOW", "CPU_HOG", "SCHED_DELAY") for x in ALERTS):
+    parser.error("--alerts requires unique supported alert names")
 FULL = args.profile == "full"
 REGRESSION = args.profile == "regression"
 OUT = ROOT / "output/quality" / (dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + args.profile)
 REPORT = {"profile": args.profile, "kernel": os.uname().release,
           "logical_cpus": os.cpu_count(),
           "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-          "targets_are_project_proposals": True, "cases": [], "phases": {}, "sha256": {}}
+          "targets_are_project_proposals": True, "alerts": ALERTS, "cached_exit": args.cached_exit,
+          "cases": [], "phases": {}, "sha256": {}}
 
 
 def save():
@@ -76,6 +84,8 @@ def run_case(label, mode, seconds, threads=1, rate=0, duty=100,
             log_path = folder / f"{scene}.log"
             log = log_path.open("w"); streams.append(log)
             command = [str(ROOT / "build" / binary), "-t", str(top), "-o", str(folder / f"{scene}.jsonl")]
+            if scene == "syscall" and args.cached_exit:
+                command += ["--cached-exit"]
             if scene == "syscall" and reference:
                 command += ["--histogram"]
             if extra:
@@ -187,15 +197,22 @@ def run_case(label, mode, seconds, threads=1, rate=0, duty=100,
         if mode == "cpu" and "cpu" in selected:
             points = ground["cpu_samples"]
             metrics = [r for r in selected["cpu"] if r.get("event") == "cpu_metric"]
-            # Use an interior interval >=5 seconds; reference is CLOCK_PROCESS_CPUTIME_ID.
-            valid = [r for r in metrics if points and points[0][0]+1.2e9 <= r["ts_ns"] <= points[-1][0]]
-            if len(valid) >= 6 and valid[-1]["ts_ns"] - valid[0]["ts_ns"] >= 5e9:
-                start_ns, end_ns = valid[0]["ts_ns"], valid[-1]["ts_ns"]
-                reference_cpu = 100*(interpolate(points, end_ns)-interpolate(points, start_ns))/(end_ns-start_ns)
-                measured_cpu = sum(b["cpu_percent_one_core"] * (b["ts_ns"]-a["ts_ns"])
-                                   for a,b in zip(valid, valid[1:])) / (end_ns-start_ns)
+            # CPU rates cover /proc read-to-read intervals, NOT JSON output times.
+            # Match each exact interval to independently sampled process CPU time.
+            valid = [r for r in metrics if points and r.get("cpu_sample_valid") and
+                     points[0][0]+.2e9 <= r["cpu_sample_start_ns"] < r["cpu_sample_end_ns"] <= points[-1][0]]
+            duration_ns = sum(r["cpu_sample_end_ns"]-r["cpu_sample_start_ns"] for r in valid)
+            if duration_ns >= 5e9:
+                reference_cpu = 100*sum(interpolate(points, r["cpu_sample_end_ns"])-
+                    interpolate(points, r["cpu_sample_start_ns"]) for r in valid)/duration_ns
+                measured_cpu = sum(r["cpu_percent_one_core"]*(r["cpu_sample_end_ns"]-
+                    r["cpu_sample_start_ns"]) for r in valid)/duration_ns
                 result["cpu_accuracy"] = {"reference_percent": reference_cpu, "measured_percent": measured_cpu,
-                    "error_percentage_points": abs(measured_cpu-reference_cpu), "target_met": abs(measured_cpu-reference_cpu) <= 2}
+                    "error_percentage_points": abs(measured_cpu-reference_cpu), "target_met": abs(measured_cpu-reference_cpu) <= 2,
+                    "aligned_duration_s": duration_ns/1e9,
+                    "max_read_span_ms": max(r["cpu_read_span_ns"] for r in valid)/1e6}
+            elif seconds >= 9:
+                raise RuntimeError("CPU accuracy test has less than 5 seconds of valid aligned samples")
         result["execution"] = "passed"
     except Exception as exc:
         result["execution"] = "failed"; result["error"] = str(exc)
@@ -242,7 +259,7 @@ def wilson(hits, n):
 
 def diagnosis_trials():
     results = {}
-    for alert in ("SYSCALL_HOTSPOT", "SYSCALL_SLOW", "CPU_HOG", "SCHED_DELAY"):
+    for alert in ALERTS:
         stats = {"positive": 0, "detected": 0, "timely": 0, "negative": 0, "false_positives": 0, "execution_errors": 0}
         for positive, trials in ((True, 100 if FULL else (10 if REGRESSION else 1)),
                                  (False, 200 if FULL else (20 if REGRESSION else 1))):
@@ -292,7 +309,9 @@ def performance():
         runs={"off":[],"on":[]}
         for trial in range(10 if FULL else (6 if REGRESSION else 2)):
             for active in ([False,True] if trial%2==0 else [True,False]):
-                runs["on" if active else "off"].append(bench.run_case(scene, active, trial, seconds=30 if FULL else (10 if REGRESSION else 3)))
+                monitor_args = ["--cached-exit"] if scene == "syscall" and args.cached_exit else []
+                runs["on" if active else "off"].append(bench.run_case(scene, active, trial,
+                    seconds=30 if FULL else (10 if REGRESSION else 3), monitor_args=monitor_args))
             REPORT["performance_progress"]={"scene":scene,"completed_pairs":trial+1}; save()
         med={k:statistics.median(r["throughput_per_s"] for r in v) for k,v in runs.items()}
         loss=100*(1-med["on"]/med["off"])
@@ -354,6 +373,11 @@ def main():
     REPORT["finished_at"]=dt.datetime.now(dt.timezone.utc).isoformat(); save()
     print(f"QUALITY_REPORT={OUT/'report.json'}",flush=True)
     failed=any(c["execution"]!="passed" for c in REPORT["cases"]) or any(p["execution"]=="failed" for p in REPORT["phases"].values())
+    if args.require_accuracy:
+        for case in REPORT["cases"]:
+            checks = case.get("count_checks", []) + [case[k] for k in
+                ("syscall_latency", "cpu_accuracy", "offcpu", "runqlat") if k in case]
+            failed |= any(v is False for check in checks for k,v in check.items() if k.endswith("target_met"))
     return int(failed)
 
 

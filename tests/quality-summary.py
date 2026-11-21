@@ -15,6 +15,7 @@ def summarize(report):
              f"- 完成时间：{report.get('finished_at') or '尚未完成'}",
              f"- 当前阶段：{report.get('active_phase') or '已结束'}",
              f"- 环境：{report['kernel']}，{report['logical_cpus']} 个逻辑 CPU；配置 {report['profile']}",
+             f"- syscall 退出身份缓存：{'开启' if report.get('cached_exit') else '关闭'}",
              "- 以下门槛为项目建议目标，不是赛事官方优秀分数线。", "",
              "执行成功、指标达标和场景覆盖完整是三个不同结论。未完成项目不记为通过。", ""]
 
@@ -44,8 +45,8 @@ def summarize(report):
          f"{x['p99_upper_us']:.3f} / {x['reference_p99_us']:.3f}", verdict(x["p99_target_met"])]
         for c in cases if (x := c.get("syscall_latency"))])
     lines.extend(["均值允许误差 max(1 µs, 参考值×10%)；P99 允许误差 max(1 µs, 参考值×20%)。参考探针仅在准确度测试开启，本身也有测量扰动。", ""])
-    section("场景 2：CPU 准确度", ["名义负载档", "参考实测 CPU%", "监测 CPU%", "误差（百分点）", "≤2 pp"], [
-        [c["duty"], f"{x['reference_percent']:.3f}", f"{x['measured_percent']:.3f}",
+    section("场景 2：CPU 准确度", ["线程数", "名义负载档", "参考实测 CPU%", "监测 CPU%", "误差（百分点）", "≤2 pp"], [
+        [c["threads"], c["duty"], f"{x['reference_percent']:.3f}", f"{x['measured_percent']:.3f}",
          f"{x['error_percentage_points']:.4f}", verdict(x["target_met"])]
         for c in cases if c["label"].startswith("cpu-accuracy-") and (x := c.get("cpu_accuracy"))])
     lines.extend(["CPU 参考为 CLOCK_PROCESS_CPUTIME_ID，按单核容量 100% 计。名义负载不等于实际覆盖占用率；虚拟机调度可能降低实际负载。", ""])
