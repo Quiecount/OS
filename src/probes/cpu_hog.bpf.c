@@ -5,6 +5,7 @@
 
 char LICENSE[] SEC("license") = "GPL";
 const volatile unsigned int ignored_pid = 0;
+const volatile unsigned long long runq_threshold_ns = 5000000ULL;
 static const struct cpu_stats empty_stats = {};
 
 /* All switched-out time: runnable waiting as well as sleeping/blocked. */
@@ -124,6 +125,8 @@ int trace_sched_switch(struct bpf_raw_tracepoint_args *ctx)
             if (stats) {
                 __sync_fetch_and_add(&stats->runq_total_ns, elapsed);
                 __sync_fetch_and_add(&stats->runq_samples, 1);
+                if (elapsed > runq_threshold_ns)
+                    __sync_fetch_and_add(&stats->runq_over_threshold, 1);
                 __sync_fetch_and_add(&stats->runq_buckets[slot], 1);
             }
         }

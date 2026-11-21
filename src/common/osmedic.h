@@ -67,6 +67,7 @@ struct cpu_stats {
     unsigned long long runtime_ns;
     unsigned long long runq_total_ns;
     unsigned long long runq_samples;
+    unsigned long long runq_over_threshold;
     unsigned long long offcpu_total_ns;
     unsigned long long offcpu_samples;
     unsigned long long runq_buckets[OSMEDIC_RUNQ_SLOTS];

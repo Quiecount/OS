@@ -18,12 +18,15 @@ int main(void)
     };
     cpu[0].stats.runq_buckets[300]=94;
     cpu[2].stats.runq_buckets[300]=1;
+    cpu[0].stats.runq_over_threshold=2;
+    cpu[2].stats.runq_over_threshold=1;
     size_t n=merge_cpu_rows(cpu, 5);
     assert(n==3 && cpu[0].pid==10 && cpu[1].pid==20 && cpu[2].pid==10417);
     assert(cpu[1].stats.runq_samples==3);
     assert(cpu[2].stats.runq_samples==95 && cpu[2].stats.runq_total_ns==10000);
     assert(cpu[2].stats.offcpu_total_ns==100000 && cpu[2].stats.offcpu_samples==98);
     assert(cpu[2].stats.runq_buckets[300]==95);
+    assert(cpu[2].stats.runq_over_threshold==3);
     /* One /proc delta is now assigned once, rather than followed by a zero row. */
     cpu[2].stats.runtime_ns=870000000;
     double streak=0;

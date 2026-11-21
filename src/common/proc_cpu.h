@@ -9,25 +9,20 @@
 struct proc_cpu_sample {
     unsigned int pid;
     unsigned long long start_ticks, cpu_ticks;
+    unsigned long long sampled_ns;
     bool seen;
 };
 static struct proc_cpu_sample proc_samples[MAX_ROWS];
-static unsigned long long proc_previous_ticks;
 
 static int sample_process_cpu(struct cpu_row *rows, size_t *n)
 {
     DIR *dir = opendir("/proc");
     struct dirent *entry;
-    struct timespec now;
     long hz = sysconf(_SC_CLK_TCK);
     if (!dir || hz <= 0) {
         if (dir) closedir(dir);
         return -1;
     }
-    /* CLOCK_BOOTTIME and field 22 use time since boot, including suspend. */
-    if (clock_gettime(CLOCK_BOOTTIME, &now)) { closedir(dir); return -1; }
-    unsigned long long now_ticks = (unsigned long long)now.tv_sec * hz +
-                                  (unsigned long long)now.tv_nsec * hz / 1000000000ULL;
     for (size_t i = 0; i < MAX_ROWS; ++i) proc_samples[i].seen = false;
     for (size_t i = 0; i < *n; ++i) rows[i].stats.runtime_ns = 0;
     while ((entry = readdir(dir))) {
@@ -39,7 +34,10 @@ static int sample_process_cpu(struct cpu_row *rows, size_t *n)
         FILE *file = fopen(path, "r");
         if (!file) continue; /* A process may exit during enumeration. */
         struct stat info;
+        unsigned long long read_begin = monitor_now_ns(CLOCK_MONOTONIC);
         bool ok = !fstat(fileno(file), &info) && fgets(buf, sizeof(buf), file);
+        unsigned long long read_end = monitor_now_ns(CLOCK_MONOTONIC);
+        unsigned long long sampled_ns = read_begin + (read_end - read_begin) / 2;
         fclose(file);
         if (!ok) continue;
         char *first = strchr(buf, '('), *last = strrchr(buf, ')');
@@ -64,11 +62,16 @@ static int sample_process_cpu(struct cpu_row *rows, size_t *n)
         if (!previous) previous = empty;
         if (!previous) continue;
         unsigned long long delta = 0;
-        if (previous->pid == pid && previous->start_ticks == start && ticks >= previous->cpu_ticks)
+        unsigned long long sample_start = 0;
+        if (previous->pid == pid && previous->start_ticks == start && ticks >= previous->cpu_ticks &&
+            previous->sampled_ns && sampled_ns > previous->sampled_ns) {
             delta = ticks - previous->cpu_ticks;
-        else if (proc_previous_ticks && start >= proc_previous_ticks)
-            delta = ticks;
-        *previous = (struct proc_cpu_sample){(unsigned int)pid, start, ticks, true};
+            sample_start = previous->sampled_ns;
+        }
+        /* A new/reused PID establishes a baseline; do not invent an interval
+         * from a differently quantized boot clock or charge a partial window. */
+        *previous = (struct proc_cpu_sample){.pid=(unsigned int)pid, .start_ticks=start,
+            .cpu_ticks=ticks, .sampled_ns=sampled_ns, .seen=true};
         size_t index;
         for (index = 0; index < *n && rows[index].pid != pid; ++index) {}
         if (index == *n) {
@@ -80,11 +83,14 @@ static int sample_process_cpu(struct cpu_row *rows, size_t *n)
             ++*n;
         }
         rows[index].stats.runtime_ns = delta * 1000000000ULL / hz;
+        rows[index].cpu_sample_start_ns = sample_start;
+        rows[index].cpu_sample_end_ns = sampled_ns;
+        rows[index].cpu_read_span_ns = read_end - read_begin;
+        rows[index].process_start_ticks = start;
     }
     closedir(dir);
     for (size_t i = 0; i < MAX_ROWS; ++i)
         if (!proc_samples[i].seen) memset(&proc_samples[i], 0, sizeof(proc_samples[i]));
-    proc_previous_ticks = now_ticks;
     return 0;
 }
 #endif

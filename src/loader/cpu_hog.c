@@ -13,6 +13,7 @@
 #include "cpu_hog.skel.h"
 #include "monitor_util.h"
 #include "osmedic.h"
+#include "cpu_rules.h"
 
 #define MAX_ROWS 4096
 
@@ -23,6 +24,7 @@
 struct streak {
     unsigned int pid;
     double seconds;
+    unsigned long long start_ticks;
     bool seen;
 };
 
@@ -81,12 +83,13 @@ static void emit_sched_delay(FILE *out, unsigned long long p99,
     fprintf(out, "},\"related_objects\":[{\"kind\":\"process\",\"pid\":%u,\"comm\":",
             top_waiter->pid);
     monitor_json_string(out, top_waiter->stats.comm);
-    fprintf(out, "}],\"key_metrics\":{\"runqlat_p99_ns\":%llu,\"baseline_p99_ns\":%llu,\"samples\":%llu},",
-            p99 * 1000, baseline_us * 1000, samples);
+    fprintf(out, "}],\"key_metrics\":{\"runqlat_p99_ns\":%llu,\"baseline_p99_ns\":%llu,\"samples\":%llu,\"over_threshold_samples\":%llu,\"threshold_ns\":%llu},",
+            p99 * 1000, baseline_us * 1000, samples,
+            top_waiter->stats.runq_over_threshold, baseline_us * 5000);
     fputs("\"suspected_root_cause\":\"CPU 运行队列等待显著升高\",\"evidence_chain\":[\"该进程 sched_wakeup/sched_switch 等待时间 P99 超过配置基线的 5 倍\",\"窗口内至少有 20 次等待样本\"],\"recommendation\":[\"检查 CPU 饱和及高优先级线程\"]}\n", out);
 }
 
-static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
+static int emit_window(int fd, FILE *out, unsigned int top,
                        unsigned long long baseline_us,
                        const char *start, const char *end)
 {
@@ -112,7 +115,10 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
     qsort(rows, n, sizeof(*rows), by_runtime_desc);
     for (size_t i = 0; i < n; ++i) {
         struct cpu_row *r = &rows[i];
-        double cpu_pct = r->stats.runtime_ns / (seconds * 10000000.0);
+        double cpu_pct = cpu_interval_percent(r->stats.runtime_ns,
+                                              r->cpu_sample_start_ns, r->cpu_sample_end_ns);
+        double sample_seconds = r->cpu_sample_start_ns && r->cpu_sample_end_ns > r->cpu_sample_start_ns ?
+            (r->cpu_sample_end_ns - r->cpu_sample_start_ns) / 1e9 : 0;
         unsigned long long p99 = monitor_p99(r->stats.runq_buckets,
                                               OSMEDIC_RUNQ_SLOTS,
                                               r->stats.runq_samples);
@@ -123,7 +129,9 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
         global_samples += r->stats.runq_samples;
         if (s) {
             s->seen = true;
-            if (cpu_pct > 80.0) s->seconds += seconds;
+            if (s->start_ticks != r->process_start_ticks) s->seconds = 0;
+            s->start_ticks = r->process_start_ticks;
+            if (cpu_pct > 80.0) s->seconds += sample_seconds;
             else s->seconds = 0;
         }
         if (i < top) {
@@ -134,7 +142,10 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
             monitor_json_string(out, start);
             fputs(",\"end\":", out);
             monitor_json_string(out, end);
-            fprintf(out, "},\"cpu_percent_one_core\":%.2f,\"offcpu_completed_ms\":%.3f,\"offcpu_completed_samples\":%llu,\"runq_wait_ms\":%.3f,\"runq_samples\":%llu,\"runq_p99_upper_us\":%llu,\"histogram\":\"log2_8_ns\",\"runq_p99_overflow\":%s,\"runq_buckets\":[",
+            fprintf(out, "},\"cpu_sample_start_ns\":%llu,\"cpu_sample_end_ns\":%llu,\"cpu_read_span_ns\":%llu,\"cpu_sample_valid\":%s,\"runq_over_threshold_samples\":%llu,\"runq_threshold_ns\":%llu",
+                    r->cpu_sample_start_ns, r->cpu_sample_end_ns, r->cpu_read_span_ns,
+                    sample_seconds > 0 ? "true" : "false", r->stats.runq_over_threshold, baseline_us * 5000);
+            fprintf(out, ",\"cpu_percent_one_core\":%.2f,\"offcpu_completed_ms\":%.3f,\"offcpu_completed_samples\":%llu,\"runq_wait_ms\":%.3f,\"runq_samples\":%llu,\"runq_p99_upper_us\":%llu,\"histogram\":\"log2_8_ns\",\"runq_p99_overflow\":%s,\"runq_buckets\":[",
                     cpu_pct, r->stats.offcpu_total_ns / 1e6, r->stats.offcpu_samples,
                     r->stats.runq_total_ns / 1e6, r->stats.runq_samples, p99,
                     r->stats.runq_buckets[OSMEDIC_RUNQ_SLOTS - 1] > r->stats.runq_samples / 100 ? "true" : "false");
@@ -142,7 +153,7 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                 fprintf(out, "%s%llu", j ? "," : "", r->stats.runq_buckets[j]);
             fputs("]}\n", out);
         }
-        if (r->stats.runq_samples >= 20 && p99 > baseline_us * 5)
+        if (runq_p99_exceeds(r->stats.runq_samples, r->stats.runq_over_threshold))
             emit_sched_delay(out, p99, r->stats.runq_samples, baseline_us, r, start, end);
         if (s && s->seconds >= 10.0 && cpu_pct > 80.0)
             emit_cpu_hog(out, r, cpu_pct, s->seconds, start, end);
@@ -218,6 +229,7 @@ int main(int argc, char **argv)
     skel = cpu_hog_bpf__open();
     if (!skel) goto done;
     skel->rodata->ignored_pid = getpid();
+    skel->rodata->runq_threshold_ns = (unsigned long long)baseline * 5000;
     if (cpu_hog_bpf__load(skel) || cpu_hog_bpf__attach(skel)) {
         fputs("无法加载或挂载 sched tracepoint（需要 root、BTF 和 sched_switch/sched_wakeup）。\n", stderr);
         goto done;
@@ -239,7 +251,7 @@ int main(int argc, char **argv)
         if (now <= last) break;
         monitor_timestamp(end, sizeof(end));
         if (emit_window(bpf_map__fd(skel->maps.cpu_totals), out,
-                        (now - last) / 1e9, top, baseline, start, end)) goto done;
+                        top, baseline, start, end)) goto done;
         last = now;
         memcpy(start, end, sizeof(start));
         if (duration && now - begin >= (uint64_t)duration * 1000000000ULL)

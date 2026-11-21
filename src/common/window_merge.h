@@ -6,7 +6,12 @@
 
 /* A producer may recreate a key while a HASH map is being drained. Merge all
  * fragments BEFORE CPU sampling, ranking, thresholds or streak accounting. */
-struct cpu_row { unsigned int pid; struct cpu_stats stats; };
+struct cpu_row {
+    unsigned int pid;
+    struct cpu_stats stats;
+    unsigned long long cpu_sample_start_ns, cpu_sample_end_ns;
+    unsigned long long cpu_read_span_ns, process_start_ticks;
+};
 struct syscall_row { struct syscall_key key; struct syscall_stats value; };
 
 static inline int cpu_pid_order(const void *a, const void *b)
@@ -30,6 +35,7 @@ static inline size_t merge_cpu_rows(struct cpu_row *rows, size_t n)
         to->runtime_ns += from->runtime_ns;
         to->runq_total_ns += from->runq_total_ns;
         to->runq_samples += from->runq_samples;
+        to->runq_over_threshold += from->runq_over_threshold;
         to->offcpu_total_ns += from->offcpu_total_ns;
         to->offcpu_samples += from->offcpu_samples;
         for (unsigned int j = 0; j < OSMEDIC_RUNQ_SLOTS; ++j)
