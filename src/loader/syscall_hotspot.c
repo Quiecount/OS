@@ -16,6 +16,7 @@
 #include "syscall_hotspot.skel.h"
 
 #define MAX_ROWS 4096
+static int pretty;
 static double slow_us = 10000.0;
 static unsigned int slow_min_samples = 20;
 static int output_histogram;
@@ -98,6 +99,7 @@ static int expected_wait(unsigned int id)
 static void emit_slow(FILE *out, const struct syscall_row *r, double mean_us,
                       unsigned long long p99, const char *start, const char *end)
 {
+    if (pretty) { fprintf(out, "ALERT SYSCALL_SLOW pid=%u id=%u mean_us=%.3f\n", r->key.pid, r->key.syscall_id, mean_us); return; }
     fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
             (unsigned long long)monitor_now_ns(CLOCK_MONOTONIC), r->key.pid, r->value.uid);
     monitor_json_string(out, r->value.comm);
@@ -160,6 +162,11 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
         if (!expected_wait(r->key.syscall_id) && r->value.calls >= slow_min_samples && mean_us > slow_us)
             emit_slow(out, r, mean_us, p99, start, end);
         if (i >= top) continue;
+        if (pretty) {
+            fprintf(out, "SYSCALL pid=%u id=%u calls=%llu rate=%.2f/s mean_us=%.3f p99_upper_us=%llu\n", r->key.pid, r->key.syscall_id, r->value.calls, rate, mean_us, p99);
+            if (rate >= min_rate && rate >= baseline_rate * 10.0) fprintf(out, "ALERT SYSCALL_HOTSPOT pid=%u id=%u\n", r->key.pid, r->key.syscall_id);
+            continue;
+        }
         fprintf(out, "{\"scene\":\"syscall\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
                 (unsigned long long)ts_ns, r->key.pid, r->value.uid);
         monitor_json_string(out, r->value.comm);
@@ -200,12 +207,12 @@ static int emit_window(int fd, FILE *out, double seconds, unsigned int top,
                 rate, baseline_rate, r->key.syscall_id, r->key.pid, mean_us, p99);
         fputs("\"suspected_root_cause\":\"进程频繁执行同一系统调用\",\"evidence_chain\":[\"该进程/系统调用组合进入当前窗口 Top-N\",\"调用频率超过配置基线的 10 倍\"],\"recommendation\":[\"检查高频调用路径并考虑批处理或缓存\"]}\n", out);
     }
-    fflush(out);
+    if (fflush(out) || ferror(out)) goto fail;
     free(cpu_values);
     free(rows);
     return 0;
 fail:
-    fprintf(stderr, "读取 syscall map 失败: %s\n", strerror(errno));
+    fprintf(stderr, "读取 syscall map 或输出失败: %s\n", strerror(errno));
     free(cpu_values);
     free(rows);
     return -1;
@@ -215,7 +222,7 @@ static int parse_positive(const char *arg, unsigned int *value)
 {
     char *end;
     unsigned long n = strtoul(arg, &end, 10);
-    if (!arg[0] || *end || n == 0 || n > 86400)
+    if (arg[0] < '0' || arg[0] > '9' || *end || n == 0 || n > 86400)
         return -1;
     *value = n;
     return 0;
@@ -235,6 +242,7 @@ int main(int argc, char **argv)
         {"histogram", no_argument, NULL, 'H'},
         {"shared-stats", no_argument, NULL, 'S'},
         {"cached-exit", no_argument, NULL, 'C'},
+        {"pretty", no_argument, NULL, 'P'},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0},
     };
@@ -251,36 +259,38 @@ int main(int argc, char **argv)
         char *endptr;
         switch (opt) {
         case 'o': path = optarg; break;
-        case 'i': if (parse_positive(optarg, &interval)) return 2; break;
-        case 'd': if (strcmp(optarg, "0") && parse_positive(optarg, &duration)) return 2; break;
-        case 't': if (parse_positive(optarg, &top)) return 2; break;
+        case 'P': pretty = 1; break;
+        case 'i': if (parse_positive(optarg, &interval)) return 1; break;
+        case 'd': if (strcmp(optarg, "0") && parse_positive(optarg, &duration)) return 1; break;
+        case 't': if (parse_positive(optarg, &top)) return 1; break;
         case 'b':
         case 's':
         case 'm': {
             double v = strtod(optarg, &endptr);
-            if (!optarg[0] || *endptr || !isfinite(v) || v <= 0 || v > 1000000000) return 2;
+            if (!optarg[0] || *endptr || !isfinite(v) || v <= 0 || v > 1000000000) return 1;
             if (opt == 'b') baseline_rate = v;
             else if (opt == 's') slow_us = v;
             else min_rate = v;
             break;
         }
-        case 'n': if (parse_positive(optarg, &slow_min_samples)) return 2; break;
+        case 'n': if (parse_positive(optarg, &slow_min_samples)) return 1; break;
         case 'H': output_histogram = 1; break;
         case 'S': shared_stats = 1; break;
         case 'C': cached_exit_identity = 1; break;
         case 'h':
-            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S] [--slow-us US] [--slow-min-samples N] [--histogram] [--shared-stats] [--cached-exit (experimental)]\n", stderr);
+            fputs("syscall_hotspot [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-rate CALLS/S] [--min-rate CALLS/S] [--slow-us US] [--slow-min-samples N] [--histogram] [--shared-stats] [--cached-exit (experimental)] [--pretty]\n", stderr);
             return 0;
-        default: return 2;
+        default: return 1;
         }
     }
-    if (optind != argc || top > MAX_ROWS) return 2;
+    if (optind != argc || top > MAX_ROWS) return 1;
     if (strcmp(path, "-")) {
         out = fopen(path, "a");
         if (!out) { perror(path); return 1; }
     }
     signal(SIGINT, monitor_signal);
     signal(SIGTERM, monitor_signal);
+    signal(SIGPIPE, SIG_IGN);
     skel = syscall_hotspot_bpf__open();
     if (!skel) goto done;
     skel->rodata->ignored_pid = getpid();
@@ -301,7 +311,9 @@ int main(int argc, char **argv)
     monitor_timestamp(start, sizeof(start));
     while (!monitor_stop) {
         uint64_t now;
-        monitor_wait_until(last + (uint64_t)interval * 1000000000ULL);
+        uint64_t next = last + (uint64_t)interval * 1000000000ULL;
+        uint64_t stop = duration ? begin + (uint64_t)duration * 1000000000ULL : UINT64_MAX;
+        monitor_wait_until(next < stop ? next : stop);
         now = monitor_now_ns(CLOCK_MONOTONIC);
         if (now <= last) break;
         monitor_timestamp(end, sizeof(end));
@@ -316,6 +328,7 @@ int main(int argc, char **argv)
     result = 0;
 done:
     syscall_hotspot_bpf__destroy(skel);
-    if (out != stdout) fclose(out);
+    if (out != stdout && fclose(out)) result = 1;
+    else if (out == stdout && fflush(out)) result = 1;
     return result;
 }

@@ -16,6 +16,7 @@
 #include "cpu_rules.h"
 
 #define MAX_ROWS 4096
+static int pretty;
 
 #include "window_merge.h"
 
@@ -51,6 +52,7 @@ static int by_runtime_desc(const void *a, const void *b)
 static void emit_cpu_hog(FILE *out, const struct cpu_row *r, double cpu_pct,
                          double streak, const char *start, const char *end)
 {
+    if (pretty) { fprintf(out, "ALERT CPU_HOG pid=%u cpu=%.2f%% duration=%.2fs\n", r->pid, cpu_pct, streak); return; }
     fprintf(out, "{\"scene\":\"cpu\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
             (unsigned long long)monitor_now_ns(CLOCK_MONOTONIC), r->pid, r->stats.uid);
     monitor_json_string(out, r->stats.comm);
@@ -72,6 +74,7 @@ static void emit_sched_delay(FILE *out, unsigned long long p99,
                              const struct cpu_row *top_waiter,
                              const char *start, const char *end)
 {
+    if (pretty) { fprintf(out, "ALERT SCHED_DELAY pid=%u p99_upper_us=%llu samples=%llu\n", top_waiter->pid, p99, samples); return; }
     fprintf(out, "{\"scene\":\"cpu\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
             (unsigned long long)monitor_now_ns(CLOCK_MONOTONIC),
             top_waiter->pid, top_waiter->stats.uid);
@@ -134,7 +137,8 @@ static int emit_window(int fd, FILE *out, unsigned int top,
             if (cpu_pct > 80.0) s->seconds += sample_seconds;
             else s->seconds = 0;
         }
-        if (i < top) {
+        if (i < top && pretty) fprintf(out, "CPU pid=%u cpu=%.2f%% runq_p99_upper_us=%llu offcpu_ms=%.3f\n", r->pid, cpu_pct, p99, r->stats.offcpu_total_ns / 1e6);
+        if (i < top && !pretty) {
             fprintf(out, "{\"scene\":\"cpu\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"comm\":",
                     (unsigned long long)monitor_now_ns(CLOCK_MONOTONIC), r->pid, r->stats.uid);
             monitor_json_string(out, r->stats.comm);
@@ -163,18 +167,21 @@ static int emit_window(int fd, FILE *out, unsigned int top,
             memset(&streaks[i], 0, sizeof(streaks[i]));
     unsigned long long p99 = monitor_p99(global_buckets, OSMEDIC_RUNQ_SLOTS,
                                           global_samples);
-    fprintf(out, "{\"scene\":\"cpu\",\"ts_ns\":%llu,\"pid\":0,\"uid\":0,\"comm\":\"scheduler\",\"schema_version\":1,\"event\":\"scheduler_metric\",\"window\":{\"start\":",
-            (unsigned long long)monitor_now_ns(CLOCK_MONOTONIC));
-    monitor_json_string(out, start);
-    fputs(",\"end\":", out);
-    monitor_json_string(out, end);
-    fprintf(out, "},\"runq_samples\":%llu,\"runq_p99_upper_us\":%llu}\n",
-            global_samples, p99);
-    fflush(out);
+    if (pretty) fprintf(out, "SCHED samples=%llu p99_upper_us=%llu\n", global_samples, p99);
+    else {
+        fprintf(out, "{\"scene\":\"cpu\",\"ts_ns\":%llu,\"pid\":0,\"uid\":0,\"comm\":\"scheduler\",\"schema_version\":1,\"event\":\"scheduler_metric\",\"window\":{\"start\":",
+                (unsigned long long)monitor_now_ns(CLOCK_MONOTONIC));
+        monitor_json_string(out, start);
+        fputs(",\"end\":", out);
+        monitor_json_string(out, end);
+        fprintf(out, "},\"runq_samples\":%llu,\"runq_p99_upper_us\":%llu}\n",
+                global_samples, p99);
+    }
+    if (fflush(out) || ferror(out)) goto fail;
     free(rows);
     return 0;
 fail:
-    fprintf(stderr, "读取 CPU map 失败: %s\n", strerror(errno));
+    fprintf(stderr, "读取 CPU map 或输出失败: %s\n", strerror(errno));
     free(rows);
     return -1;
 }
@@ -183,7 +190,7 @@ static int parse_positive(const char *arg, unsigned int *out)
 {
     char *end;
     unsigned long n = strtoul(arg, &end, 10);
-    if (!arg[0] || *end || n == 0 || n > 86400) return -1;
+    if (arg[0] < '0' || arg[0] > '9' || *end || n == 0 || n > 86400) return -1;
     *out = n;
     return 0;
 }
@@ -196,6 +203,7 @@ int main(int argc, char **argv)
         {"duration", required_argument, NULL, 'd'},
         {"top", required_argument, NULL, 't'},
         {"baseline-p99-us", required_argument, NULL, 'b'},
+        {"pretty", no_argument, NULL, 'P'},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0},
     };
@@ -209,23 +217,25 @@ int main(int argc, char **argv)
     while ((opt = getopt_long(argc, argv, "o:i:d:t:b:h", options, NULL)) != -1) {
         switch (opt) {
         case 'o': path = optarg; break;
-        case 'i': if (parse_positive(optarg, &interval)) return 2; break;
-        case 'd': if (strcmp(optarg, "0") && parse_positive(optarg, &duration)) return 2; break;
-        case 't': if (parse_positive(optarg, &top)) return 2; break;
-        case 'b': if (parse_positive(optarg, &baseline)) return 2; break;
+        case 'P': pretty = 1; break;
+        case 'i': if (parse_positive(optarg, &interval)) return 1; break;
+        case 'd': if (strcmp(optarg, "0") && parse_positive(optarg, &duration)) return 1; break;
+        case 't': if (parse_positive(optarg, &top)) return 1; break;
+        case 'b': if (parse_positive(optarg, &baseline)) return 1; break;
         case 'h':
-            fputs("cpu_hog [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-p99-us US]\n", stderr);
+            fputs("cpu_hog [-o FILE|-] [-i SEC] [-d SEC] [-t TOP] [--baseline-p99-us US] [--pretty]\n", stderr);
             return 0;
-        default: return 2;
+        default: return 1;
         }
     }
-    if (optind != argc || top > MAX_ROWS) return 2;
+    if (optind != argc || top > MAX_ROWS) return 1;
     if (strcmp(path, "-")) {
         out = fopen(path, "a");
         if (!out) { perror(path); return 1; }
     }
     signal(SIGINT, monitor_signal);
     signal(SIGTERM, monitor_signal);
+    signal(SIGPIPE, SIG_IGN);
     skel = cpu_hog_bpf__open();
     if (!skel) goto done;
     skel->rodata->ignored_pid = getpid();
@@ -246,7 +256,9 @@ int main(int argc, char **argv)
     monitor_timestamp(start, sizeof(start));
     while (!monitor_stop) {
         uint64_t now;
-        monitor_wait_until(last + (uint64_t)interval * 1000000000ULL);
+        uint64_t next = last + (uint64_t)interval * 1000000000ULL;
+        uint64_t stop = duration ? begin + (uint64_t)duration * 1000000000ULL : UINT64_MAX;
+        monitor_wait_until(next < stop ? next : stop);
         now = monitor_now_ns(CLOCK_MONOTONIC);
         if (now <= last) break;
         monitor_timestamp(end, sizeof(end));
@@ -260,6 +272,7 @@ int main(int argc, char **argv)
     result = 0;
 done:
     cpu_hog_bpf__destroy(skel);
-    if (out != stdout) fclose(out);
+    if (out != stdout && fclose(out)) result = 1;
+    else if (out == stdout && fflush(out)) result = 1;
     return result;
 }

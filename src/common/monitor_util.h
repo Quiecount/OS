@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include "latency_hist.h"
+#include "../loader/json_output.h"
 
 static volatile sig_atomic_t monitor_stop;
 
@@ -36,23 +37,12 @@ static void monitor_timestamp(char *out, size_t size)
     snprintf(out, size, "%s.%03ldZ", base, ts.tv_nsec / 1000000);
 }
 
-static void monitor_json_string(FILE *out, const char *s)
+static inline void monitor_json_string(FILE *out, const char *s)
 {
-    fputc('"', out);
-    for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
-        if (*p == '"' || *p == '\\') {
-            fputc('\\', out);
-            fputc(*p, out);
-        } else if (*p < 0x20) {
-            fprintf(out, "\\u%04x", *p);
-        } else {
-            fputc(*p, out);
-        }
-    }
-    fputc('"', out);
+    write_json_string(out, s, strlen(s));
 }
 
-static void monitor_wait_until(uint64_t deadline_ns)
+static inline void monitor_wait_until(uint64_t deadline_ns)
 {
     while (!monitor_stop) {
         uint64_t now = monitor_now_ns(CLOCK_MONOTONIC);
