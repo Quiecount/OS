@@ -38,17 +38,18 @@ struct ev_cpu {
 // 场景 3：I/O 延迟抖动 / 阻塞等待
 struct ev_io {
     struct ev_common c;
-    unsigned long long delta_ns;    // issue→complete 延迟（骨架恒为 0）
-    // TODO(阶段2)：block_rq_issue 在 hash map 记起始时间（key=请求标识），
-    //              block_rq_complete 里取差值；按进程/设备聚合直方图与分位数
+    unsigned long long delta_ns;    // issue→最终 complete 延迟
+    unsigned long long process_start_ns;
+    unsigned long long bytes;
+    unsigned int major, minor, operation, queue_depth, error;
+    char disk[32];
 };
 
 // 场景 4：内存抖动 / OOM 风险
 struct ev_mem {
     struct ev_common c;
     unsigned long addr;         // 缺页地址
-    // TODO(阶段2)：缺页速率统计（按时间窗口计数）、sys_enter_mmap 大块申请、
-    //              oom/oom_mark_victim 事件（OOM 直接证据）
+    unsigned int kind;          // 1 = OOM victim；缺页/mmap 走累计 map
 };
 
 // 场景 5：锁竞争
@@ -56,8 +57,10 @@ struct ev_lock {
     struct ev_common c;
     unsigned long uaddr;        // futex 锁地址（用户态地址）
     int op;                     // futex 操作码
-    // TODO(阶段2)：sys_enter_futex / sys_exit_futex 配对计时；
-    //              off-cpu 等待栈聚合，定位"哪把锁、哪些线程在排队"
+    unsigned long long process_start_ns, wait_ns, offcpu_ns;
+    long ret;
+    unsigned int tid, waiter_count;
+    int stack_id;
 };
 
 #endif /* EVENTS_H */
