@@ -81,12 +81,16 @@ int mmap_exit(struct trace_event_raw_sys_exit *ctx)
 SEC("tp_btf/mark_victim")
 int BPF_PROG(oom, int pid)
 {
-    struct ev_mem e = {};
     if (target_pid && (__u32)pid != target_pid) return 0;
-    e.c.ts_ns = bpf_ktime_get_ns(); e.c.pid = pid; e.kind = 1;
-    /* tracepoint 只给 victim PID；禁止从 current 伪造 victim 的 uid/comm。 */
-    if (bpf_ringbuf_output(&events, &e, sizeof(e), 0))
+    struct ev_mem *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e) {
         __sync_fetch_and_add(&ringbuf_dropped, 1);
+        return 0;
+    }
+    __builtin_memset(e, 0, sizeof(*e));
+    e->c.ts_ns = bpf_ktime_get_ns(); e->c.pid = pid; e->kind = 1;
+    /* tracepoint 只给 victim PID；禁止从 current 伪造 victim 的 uid/comm。 */
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }
 

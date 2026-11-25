@@ -79,8 +79,13 @@ int BPF_PROG(record_complete, struct request *rq, blk_status_t error, unsigned i
     }
     p->e.c.ts_ns = bpf_ktime_get_ns();
     p->e.delta_ns = p->e.c.ts_ns - p->started_ns;
-    if (bpf_ringbuf_output(&events, &p->e, sizeof(p->e), 0))
+    struct ev_io *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
         __sync_fetch_and_add(&ringbuf_dropped, 1);
+    else {
+        __builtin_memcpy(event, &p->e, sizeof(*event));
+        bpf_ringbuf_submit(event, 0);
+    }
     release_request(p);
     bpf_map_delete_elem(&starts, &key);
     return 0;

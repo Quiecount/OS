@@ -90,8 +90,13 @@ int leave(struct trace_event_raw_sys_exit *ctx)
     if (!w) return 0;
     w->e.c.ts_ns = bpf_ktime_get_ns();
     w->e.wait_ns = w->e.c.ts_ns - w->started_ns; w->e.ret = ctx->ret;
-    if (bpf_ringbuf_output(&events, &w->e, sizeof(w->e), 0))
+    struct ev_lock *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
         __sync_fetch_and_add(&ringbuf_dropped, 1);
+    else {
+        __builtin_memcpy(event, &w->e, sizeof(*event));
+        bpf_ringbuf_submit(event, 0);
+    }
     release_wait(w); bpf_map_delete_elem(&waits, &tid);
     return 0;
 }
