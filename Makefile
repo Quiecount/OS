@@ -20,12 +20,13 @@ USER_LIBS := $(LIBBPF_LIBS) -lelf -lz
 BPF_OBJS := $(patsubst src/probes/%.bpf.c,$(BUILD)/%.bpf.o,$(wildcard src/probes/*.bpf.c))
 
 # 故障注入用 C 程序（纯用户态）
-FAULT_BINS := $(BUILD)/syscall_bomb $(BUILD)/lock_contention
+FAULT_BINS := $(BUILD)/syscall_bomb $(BUILD)/lock_workload
 
 .PHONY: all clean check check-verifier check-stage1
 .SECONDARY:
 
-all: $(BPF_OBJS) $(BUILD)/execsnoop $(BUILD)/syscall_hotspot $(BUILD)/cpu_hog $(FAULT_BINS)
+STAGE2_BINS := $(addprefix $(BUILD)/,syscall_hotspot cpu_hog io_latency mem_pressure lock_contention)
+all: $(BPF_OBJS) $(BUILD)/execsnoop $(STAGE2_BINS) $(FAULT_BINS)
 
 .PHONY: quality-tools quality-unit
 quality-tools: check $(BUILD)/quality-workload $(BUILD)/quality-reference quality-unit
@@ -53,6 +54,15 @@ $(BUILD)/quality-workload: tests/quality-workload.c
 $(BUILD)/quality-reference: tests/quality-reference.c $(BUILD)/quality_reference.skel.h
 	$(CC) $(USER_CFLAGS) -Ibuild $< -o $@ $(USER_LIBS)
 
+$(BUILD)/stage2_workload: tests/stage2_workload.c
+	@mkdir -p $(BUILD)
+	$(CC) $(USER_CFLAGS) -fno-omit-frame-pointer -pthread $< -o $@
+
+.PHONY: check-stage2
+check-stage2: all quality-unit $(BUILD)/stage2_workload
+	PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stage2.py
+	bash tests/stage2-two-scenarios.sh
+
 # 从当前内核 BTF 自动生成内核类型头（只在缺失时执行；git 不跟踪）
 src/vmlinux.h: $(VMLINUX_BTF)
 	$(BPFTOOL) btf dump file $< format c > $@
@@ -65,8 +75,11 @@ $(BUILD)/%.bpf.o: src/probes/%.bpf.c src/events.h src/vmlinux.h src/common/osmed
 $(BUILD)/%.skel.h: $(BUILD)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
-$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h src/common/proc_cpu.h src/common/latency_hist.h src/common/window_merge.h src/common/cpu_rules.h
+$(BUILD)/syscall_hotspot $(BUILD)/cpu_hog: $(BUILD)/%: src/loader/%.c $(BUILD)/%.skel.h src/common/osmedic.h src/common/monitor_util.h src/loader/json_output.h src/common/proc_cpu.h src/common/latency_hist.h src/common/window_merge.h src/common/cpu_rules.h
 	$(CC) $(USER_CFLAGS) -I$(BUILD) -Isrc -Isrc/common $< -o $@ $(USER_LIBS)
+
+$(BUILD)/io_latency $(BUILD)/mem_pressure $(BUILD)/lock_contention: $(BUILD)/%: src/loader/stage2.c $(addprefix $(BUILD)/,io_latency.skel.h mem_pressure.skel.h lock_contention.skel.h) src/common/stage2.h src/common/monitor_util.h src/loader/json_output.h
+	$(CC) $(USER_CFLAGS) -DOSMEDIC_NAME='"$*"' -I$(BUILD) -Isrc -Isrc/common $< -o $@ $(USER_LIBS)
 
 # 探针① 的用户态加载器（其余场景加载器按此模板在阶段 2 补齐）
 $(BUILD)/execsnoop.o: src/loader/execsnoop.c src/events.h src/loader/json_output.h
@@ -81,13 +94,15 @@ $(BUILD)/syscall_bomb: faults/syscall_bomb.c
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LDFLAGS) -o $@
 
-$(BUILD)/lock_contention: faults/lock_contention.c
+$(BUILD)/lock_workload: faults/lock_contention.c
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread $< $(LDFLAGS) -o $@
 
 check: all
 	python3 tests/test_execsnoop.py ExecsnoopTest.test_cli_validation
 	$(MAKE) -C src check-io-math
+	@test -x $(BUILD)/syscall_hotspot && test -x $(BUILD)/cpu_hog
+	@echo "STAGE2_BUILD_OK"
 
 $(BUILD)/verifier_lab: src/loader/verifier_lab.c
 	@mkdir -p $(BUILD)
@@ -98,10 +113,6 @@ check-verifier: $(BUILD)/verifier_lab
 
 check-stage1:
 	PYTHONDONTWRITEBYTECODE=1 python3 tests/stage1_acceptance.py
-
-check: all
-	@test -x $(BUILD)/syscall_hotspot && test -x $(BUILD)/cpu_hog
-	@echo "STAGE2_BUILD_OK"
 
 clean:
 	rm -rf $(BUILD) src/vmlinux.h
