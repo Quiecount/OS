@@ -159,3 +159,5 @@ git push origin main         # 尽力推：GitHub 镜像；网络不通就跳过
 - 2026-11-13：README 报名信息定稿——高校：杭州电子科技大学；队伍ID：T2026103369913109；按要求删除项目名称/选题方向/队员/指导教师行（标题即项目名称）
 - 2026-11-13：第一支探针 execsnoop 完成——src/probes + src/loader + src/event.h + Makefile + docs/开发指南；VM 内构建 = 仓库根目录 `make`（自动生成 src/vmlinux.h），运行 = `sudo ./build/execsnoop`；GitHub 同步暂缓（网络不稳），main 只推 gitlab
 - 2026-11-18：五场景总体框架落地——src/events.h 统一事件契约（execsnoop 已重构接入，旧 event.h 删除）；5 个场景探针骨架（syscall/cpu/io/mem/lock，可编译、指标 TODO 见各文件与系统设计文档 §四）；faults 注入全套（01-05 脚本 + syscall_bomb + lock_contention）；analysis/collector.py、deploy.sh、test.sh 骨架；总体设计见 docs/系统设计_五场景总体框架.md。**GitLab 推送暂停中（用户要求本地攒批，等指令恢复）**
+- 2026-11-18：接口契约 v1.0 定稿（docs/接口契约.md）——六条接缝的输入/输出成文：JSONL 格式（stdout 纯 JSONL/提示走 stderr）、地址字段 hex 字符串防精度丢失、七字段报告 schema、异常类型枚举与 key_metrics 键名表；execsnoop 加载器 JSONL 迁移列为阶段 2 技术债。推送已恢复，攒批提交已全部推上 GitLab
+- 2026-11-18：**开发计划压缩改版——冲刺终线改为 12/15**（原 1/4），27 天 4 周冲刺：验证收口 3 天→场景 1-3 十一天→场景 4-5 五天→诊断引擎 3 天→LLM 2 天→收尾 2 天→缓冲 2 天；12/16-01/04 变打磨期（多平台等增量）；砍单顺序改为：LLM→场景5进阶指标→场景5。详见开发计划 §二/§五
