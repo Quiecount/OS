@@ -1,20 +1,34 @@
-// 场景1 故障注入：syscall bomb —— 高频 stat 系统调用，制造 syscall 热点
-// 观测方式：加载 syscall_hotspot 探针后运行本程序，观察事件洪流
+#define _POSIX_C_SOURCE 200809L
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
+#include <time.h>
 
-int main(void)
+static double now_seconds(void)
 {
-    unsigned long n = 0;
-    struct stat st;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
 
-    printf("[syscall_bomb] 高频 stat 注入中，Ctrl+C 结束\n");
-    for (;;) {
-        if (stat("/tmp", &st) == 0) {
-            n++;
-            if (n % 500000 == 0)
-                printf("[syscall_bomb] 已执行 %lu 次 stat\n", n);
+int main(int argc, char **argv)
+{
+    double seconds = argc > 1 ? strtod(argv[1], NULL) : 5.0;
+    double start = now_seconds();
+    unsigned long long calls = 0;
+    struct stat info;
+    if (seconds <= 0 || seconds > 3600) return 2;
+    while (now_seconds() - start < seconds) {
+        if (fstatat(AT_FDCWD, "/proc/self/stat", &info, 0) != 0) {
+            perror("fstatat");
+            return 1;
         }
+        ++calls;
     }
+    double elapsed = now_seconds() - start;
+    printf("calls=%llu elapsed_s=%.3f rate_per_s=%.0f\n",
+           calls, elapsed, calls / elapsed);
     return 0;
 }

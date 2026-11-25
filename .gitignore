@@ -17,3 +17,6 @@ a.out
 /src/.output/
 build/
 src/vmlinux.h
+output/
+__pycache__/
+*.pyc

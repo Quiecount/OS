@@ -7,5 +7,5 @@ BIN="$(cd "$(dirname "$0")/.." && pwd)/build/syscall_bomb"
 
 [ -x "$BIN" ] || { echo "找不到 $BIN —— 先在仓库根目录 make"; exit 1; }
 echo "[注入] syscall bomb 运行 ${DUR}s（另开终端观察探针输出）"
-timeout "$DUR" "$BIN" || true
+timeout "$((DUR + 2))" "$BIN" "$DUR"
 echo "[结束] 场景1 注入完成"
