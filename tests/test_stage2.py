@@ -54,7 +54,7 @@ class Stage2Test(unittest.TestCase):
         self.addCleanup(stderr.close)
         proc = subprocess.Popen([str(BUILD / binary), '--duration', str(seconds), *args], stdout=stdout, stderr=stderr)
         self.addCleanup(self.stop_process, proc)
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         while '已启动' not in log.read_text():
             self.assertIsNone(proc.poll(), log.read_text())
             self.assertLess(time.monotonic(), deadline, log.read_text())
@@ -91,12 +91,14 @@ class Stage2Test(unittest.TestCase):
                     result = subprocess.run([str(BUILD / binary), '--duration', bad], capture_output=True)
                     self.assertEqual(result.returncode, 1)
                     self.assertFalse(result.stdout)
+                # duration 从探针挂载完成起计；Verifier 加载耗时不属于采集窗口。
+                # 从 ready 提示计时，仍用严格3秒门限抓住误等完整10秒interval的回归。
+                monitor, path = self.monitor(binary, 1, '--interval', '10', '--pretty')
                 start = time.monotonic()
-                result = subprocess.run([str(BUILD / binary), '--duration', '1', '--interval', '10', '--pretty'], capture_output=True, text=True, timeout=8)
-                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(monitor.wait(timeout=3), 0)
                 self.assertLess(time.monotonic() - start, 3, 'duration不应等待整个interval')
-                self.assertNotIn('"scene":', result.stdout)
-                result = subprocess.run([str(BUILD / binary), '-d', '1', '-o', '/dev/full'], capture_output=True, timeout=8)
+                self.assertNotIn('"scene":', path.read_text())
+                result = subprocess.run([str(BUILD / binary), '-d', '1', '-o', '/dev/full'], capture_output=True, timeout=30)
                 self.assertEqual(result.returncode, 1, '写失败不能报告成功')
 
     def test_io_known_bytes_and_attribution(self):
