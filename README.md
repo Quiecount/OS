@@ -54,15 +54,15 @@ eBPF 探针层 ──► 采集代理 ──► 聚合与特征层 ──► 规
 AGENTS.md           # 仓库协作规范（团队成员与 AI 编程助手必读）
 docs/
 ├── 华东区域赛应用开发赛道选题分析.md    # 选题调研：历届作品盘点与选题决策
-├── 开发计划_eBPF异常观测与根因定位工具.md # 8.5 周分阶段开发计划（含验收标准/砍单指南）
+├── 开发计划_eBPF异常观测与根因定位工具.md # 12/15 冲刺计划（含验收标准/砍单指南）
 ├── 系统设计_五场景总体框架.md           # 总体架构：五层流水线 / 事件契约 / 场景填肉清单
 ├── 开发指南_第一支探针execsnoop.md      # 探针① execsnoop：原理走读 + 构建运行 + 排错
 └── 团队开发环境搭建指南.md              # 开发环境：各自本机 Hyper-V 虚拟机为主，云虚拟机备选
-src/                # 探针（probes/ 6 个：execsnoop 完整 + 5 场景骨架）/ 加载器 / 事件契约 events.h
-analysis/           # 聚合与规则引擎（骨架：collector.py，阶段 3 完成规则）
+src/                # execsnoop、五场景与学习版探针 / 加载器 / 事件契约 events.h
+analysis/           # collector 汇总七字段报告；阶段 3 完成基线与统一规则引擎
 report/             # LLM 报告层（阶段 4 建，带 --no-llm 降级开关）
 faults/             # 五场景故障注入（01-05 脚本 + syscall_bomb / lock_contention 程序）
-tests/              # 一键回归测试（骨架：test.sh，阶段 3 接入自动判定）
+tests/              # 五场景功能回归；阶段 3 接入正常负载基线验证
 deploy.sh           # 一键部署（依赖安装 + 编译）
 test.sh             # 一键测试入口（转调 tests/test.sh）
 ```
@@ -73,7 +73,7 @@ test.sh             # 一键测试入口（转调 tests/test.sh）
 |---|---|---|
 | 0 | 环境搭建 + 第一支探针 | yu 的 minimal 已验收；其余环境清单待逐项确认 |
 | 1 | libbpf 探针基础 | :construction: 系统工具链、20 项测试及 Verifier 实验通过，待全员独立验收 |
-| 2 | 五场景逐个攻坚 | :construction: 场景 1–2 已实现并完成首轮质量长测，修复与优化中；其余待开发 |
+| 2 | 五场景逐个攻坚 | 五场景采集、注入、JSONL 与功能回归通过；性能目标及多平台适配继续验证 |
 | 3 | 诊断引擎 + 结构化输出 | :hourglass: 待开始 |
 | 4 | LLM 报告层 | :hourglass: 待开始 |
 | 5 | 性能开销评测 + 一键复现 + 文档 + 视频 | :hourglass: 待开始 |
@@ -122,6 +122,7 @@ GitLab 主干的 execsnoop 已按[接口契约](docs/接口契约.md)迁移为�
 
 ```bash
 make check
+mkdir -p output
 sudo ./build/execsnoop --duration 5 > /tmp/execsnoop.jsonl
 python3 analysis/collector.py --input /tmp/execsnoop.jsonl
 # 人工查看表格时：sudo ./build/execsnoop --duration 5 --pretty
@@ -172,6 +173,25 @@ python3 tests/quality-summary.py output/quality/某次目录/report.json
 ```
 
 `syscall_hotspot --slow-us 10000 --slow-min-samples 20` 配置独立慢调用告警；`--histogram` 输出用于准确度对照的细分桶，`--shared-stats` 切换共享统计模式。off-CPU 当前统计已完成的切出→切入区间，不是实时等待使用率。完整评测尚未证明两个模块全部达到建议优秀目标。
+
+## 五场景功能验收与场景 3–5
+
+```bash
+make check quality-unit
+sudo bash test.sh                       # 五场景注入、规则通路与反例检查
+sudo ./build/io_latency --duration 15
+sudo ./build/mem_pressure --duration 15
+sudo ./build/lock_contention --duration 15
+```
+
+另开终端分别运行 `bash faults/03_io.sh 5`、`bash faults/04_mem.sh 5`、`bash faults/05_lock.sh 5`。
+三个加载器均支持 `--pid`、`--interval`、`--output`、`--pretty`；默认 JSONL 可传给 collector。
+锁注入程序名为 `build/lock_workload`，`build/lock_contention` 是探针加载器。
+
+2026-11-25 在 openEuler 24.03 / 6.6 x86_64 完成五场景功能闭环；
+IO 已知字节数、mmap失败/RSS、futex超时与EAGAIN、用户栈、隔离cgroup OOM均有真实测试。
+默认阈值需用同机正常负载校准，尚不代表生产误报率或性能目标达标。
+设计、参数、精度口径、容量与兼容性边界见[阶段2实现与验收](docs/阶段2_五场景实现与验收.md)。
 
 ## 演示视频
 
