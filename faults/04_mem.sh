@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# 场景4 注入：内存压力（stress-ng 反复分配/释放内存，制造缺页与回收压力）
-# 用法：./faults/04_mem.sh [持续秒数，默认 60]
+# 场景4：默认仅64MiB工作集，反复分配/触页；不诱发全机OOM。
 set -euo pipefail
 DUR="${1:-60}"
-
-command -v stress-ng >/dev/null || { echo "缺少 stress-ng：sudo dnf install -y stress-ng"; exit 1; }
-echo "[注入] stress-ng --vm 2 --vm-bytes 1G 运行 ${DUR}s"
-# 注意：VM 内存小的环境把 --vm-bytes 调小（如 512m），避免直接 OOM 掉加载器
-stress-ng --vm 2 --vm-bytes 1G --vm-hang 0 --timeout "${DUR}"s
-echo "[结束] 场景4 注入完成"
+[[ $# -le 1 && "$DUR" =~ ^[0-9]+$ && ${#DUR} -le 5 ]] && ((10#$DUR > 0 && 10#$DUR <= 86400)) || { echo '时长须为1..86400秒' >&2; exit 1; }
+command -v stress-ng >/dev/null || { echo '缺少 stress-ng：sudo dnf install -y stress-ng' >&2; exit 1; }
+printf '[注入] stress-ng --vm 1 --vm-bytes 64m，%ss\n' "$DUR"
+stress-ng --vm 1 --vm-bytes 64m --vm-hang 0 --timeout "${DUR}s"
