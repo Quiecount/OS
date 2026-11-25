@@ -26,19 +26,24 @@ struct {
 SEC("tracepoint/syscalls/sys_enter_execve")
 int trace_execve(struct trace_event_raw_sys_enter *ctx)
 {
-    struct ev_exec e = {};  // 必须清零！读未初始化内存会被 Verifier 直接拒绝
+    // 先在 ringbuf 里预留一块内存，直接往里填（避免栈上构造再拷贝的开销）
+    struct ev_exec *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e)
+        return 0;   // ringbuf 满：丢弃本事件（用户态可感知丢帧）
+    __builtin_memset(e, 0, sizeof(*e));  // reserve 不清零，防泄露内核残留字节
 
     // 三个内核预注册的 helper：取当前进程的 pid / uid / 进程名（统一放 ev_common 头）
-    e.c.pid = bpf_get_current_pid_tgid() >> 32;    // 返回值高 32 位是 pid
-    e.c.uid = bpf_get_current_uid_gid();           // 返回值低 32 位是 uid
-    bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
+    e->c.ts_ns = bpf_ktime_get_ns();
+    e->c.pid = bpf_get_current_pid_tgid() >> 32;    // 返回值高 32 位是 pid
+    e->c.uid = bpf_get_current_uid_gid();           // 返回值低 32 位是 uid
+    bpf_get_current_comm(&e->c.comm, sizeof(e->c.comm));
 
     // execve 的第一个参数（args[0]）是文件名指针，位于用户态地址空间
     // 用户态指针绝不能直接解引用（会被 Verifier 拒绝），必须用 helper 安全拷贝
-    bpf_probe_read_user_str(e.filename, sizeof(e.filename),
+    bpf_probe_read_user_str(e->filename, sizeof(e->filename),
                             (const void *)ctx->args[0]);
 
     // 事件入队，交给用户态；后续打印、过滤、分析都在用户态做
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }

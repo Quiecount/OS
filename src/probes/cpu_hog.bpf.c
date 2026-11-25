@@ -16,15 +16,18 @@ struct {
 SEC("tracepoint/sched/sched_switch")
 int trace_sched_switch(struct trace_event_raw_sched_switch *ctx)
 {
-    struct ev_cpu e = {};
+    struct ev_cpu *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e)
+        return 0;
+    __builtin_memset(e, 0, sizeof(*e));
 
-    e.c.ts_ns = bpf_ktime_get_ns();
-    e.c.pid = bpf_get_current_pid_tgid() >> 32;
-    e.c.uid = bpf_get_current_uid_gid();
-    bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
-    e.prev_pid = ctx->prev_pid;     // 被换下的进程
-    e.next_pid = ctx->next_pid;     // 换上的进程
+    e->c.ts_ns = bpf_ktime_get_ns();
+    e->c.pid = bpf_get_current_pid_tgid() >> 32;
+    e->c.uid = bpf_get_current_uid_gid();
+    bpf_get_current_comm(&e->c.comm, sizeof(e->c.comm));
+    e->prev_pid = ctx->prev_pid;     // 被换下的进程
+    e->next_pid = ctx->next_pid;     // 换上的进程
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }

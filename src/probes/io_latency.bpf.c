@@ -19,14 +19,17 @@ struct {
 SEC("tracepoint/block/block_rq_issue")
 int trace_block_issue(void *ctx)
 {
-    struct ev_io e = {};
+    struct ev_io *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e)
+        return 0;
+    __builtin_memset(e, 0, sizeof(*e));
 
-    e.c.ts_ns = bpf_ktime_get_ns();                 // issue 时刻 = 延迟起点
-    e.c.pid = bpf_get_current_pid_tgid() >> 32;
-    e.c.uid = bpf_get_current_uid_gid();
-    bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
-    e.delta_ns = 0;                                 // TODO(阶段2)：配对后填真实延迟
+    e->c.ts_ns = bpf_ktime_get_ns();                 // issue 时刻 = 延迟起点
+    e->c.pid = bpf_get_current_pid_tgid() >> 32;
+    e->c.uid = bpf_get_current_uid_gid();
+    bpf_get_current_comm(&e->c.comm, sizeof(e->c.comm));
+    e->delta_ns = 0;                                 // TODO(阶段2)：配对后填真实延迟
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }

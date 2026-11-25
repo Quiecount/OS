@@ -16,15 +16,18 @@ struct {
 SEC("tracepoint/syscalls/sys_enter_futex")
 int trace_futex_enter(struct trace_event_raw_sys_enter *ctx)
 {
-    struct ev_lock e = {};
+    struct ev_lock *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e)
+        return 0;
+    __builtin_memset(e, 0, sizeof(*e));
 
-    e.c.ts_ns = bpf_ktime_get_ns();
-    e.c.pid = bpf_get_current_pid_tgid() >> 32;
-    e.c.uid = bpf_get_current_uid_gid();
-    bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
-    e.uaddr = (unsigned long)ctx->args[0];  // futex(uaddr, op, ...) 第一个参数：锁地址
-    e.op = (int)ctx->args[1];               // 操作码（WAIT/WAKE 等）
+    e->c.ts_ns = bpf_ktime_get_ns();
+    e->c.pid = bpf_get_current_pid_tgid() >> 32;
+    e->c.uid = bpf_get_current_uid_gid();
+    bpf_get_current_comm(&e->c.comm, sizeof(e->c.comm));
+    e->uaddr = (unsigned long)ctx->args[0];  // futex(uaddr, op, ...) 第一个参数：锁地址
+    e->op = (int)ctx->args[1];               // 操作码（WAIT/WAKE 等）
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }

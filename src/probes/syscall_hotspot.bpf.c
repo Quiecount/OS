@@ -16,14 +16,17 @@ struct {
 SEC("tracepoint/raw_syscalls/sys_enter")
 int trace_syscall_enter(struct trace_event_raw_sys_enter *ctx)
 {
-    struct ev_syscall e = {};
+    struct ev_syscall *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e)
+        return 0;
+    __builtin_memset(e, 0, sizeof(*e));
 
-    e.c.ts_ns = bpf_ktime_get_ns();
-    e.c.pid = bpf_get_current_pid_tgid() >> 32;
-    e.c.uid = bpf_get_current_uid_gid();
-    bpf_get_current_comm(&e.c.comm, sizeof(e.c.comm));
-    e.id = ctx->id;                 // 系统调用号
+    e->c.ts_ns = bpf_ktime_get_ns();
+    e->c.pid = bpf_get_current_pid_tgid() >> 32;
+    e->c.uid = bpf_get_current_uid_gid();
+    bpf_get_current_comm(&e->c.comm, sizeof(e->c.comm));
+    e->id = ctx->id;                 // 系统调用号
 
-    bpf_ringbuf_submit(&e, sizeof(e), 0);
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }
