@@ -1,0 +1,49 @@
+#!/usr/bin/env bpftrace
+/* 场景5 交叉验证（方法3）：独立 bpftrace 脚本，复刻 lock_contention 探针语义
+ * - 只计会睡眠的 WAIT 类操作：cmd = op & 0x7F ∈ {FUTEX_WAIT(0), FUTEX_WAIT_BITSET(9)}
+ * - 只统计 >= 100us 的等待（与加载器默认 --threshold-us 100 一致）
+ * - 按 tid 配对 enter/exit（同进程多线程 pid 相同，必须用 tid 区分）
+ * 输出：@wait_ns 按锁地址累计等待、@waits 次数、@tids (锁地址,tid) 等待次数
+ *       @comm_of/@pid_of 供 tid → 进程名/进程号 对照
+ * 运行: timeout -s INT <秒> bpftrace futex_trace.bt
+ */
+tracepoint:syscalls:sys_enter_futex
+/(args->op & 0x7f) == 0 || (args->op & 0x7f) == 9/
+{
+  @uaddr[tid] = args->uaddr;
+  @t0[tid] = nsecs;
+  @comm_of[tid] = comm;
+  @pid_of[tid] = pid;
+}
+
+tracepoint:syscalls:sys_exit_futex
+/@t0[tid]/
+{
+  $d = nsecs - @t0[tid];
+  $u = @uaddr[tid];
+  if ($d >= 100000) {
+    @wait_ns[$u] = sum($d);
+    @waits[$u] = count();
+    @tids[$u, tid] = count();
+  }
+  delete(@uaddr[tid]);
+  delete(@t0[tid]);
+}
+
+END
+{
+  printf("BT_BEGIN\n");
+  print(@wait_ns);
+  print(@waits);
+  print(@tids);
+  print(@comm_of);
+  print(@pid_of);
+  printf("BT_END\n");
+  clear(@wait_ns);
+  clear(@waits);
+  clear(@tids);
+  clear(@comm_of);
+  clear(@pid_of);
+  clear(@uaddr);
+  clear(@t0);
+}
