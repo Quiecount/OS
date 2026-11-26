@@ -56,8 +56,10 @@ struct ev_lock {
     struct ev_common c;
     unsigned long uaddr;        // futex 锁地址（用户态地址）
     int op;                     // futex 操作码
-    // TODO(阶段2)：sys_enter_futex / sys_exit_futex 配对计时；
-    //              off-cpu 等待栈聚合，定位"哪把锁、哪些线程在排队"
+    // 2026-11-25 追加（只加不改）：enter→exit 配对计时后才有意义；ts_ns = exit 时刻
+    unsigned long long duration_ns;    // 本次 futex 调用耗时（仅耗时 >= 阈值的事件才上报）
+    unsigned int tid;                  // 线程 ID：锁竞争的排队者是线程，pid(tgid) 无法区分
+    // 后续增强（打磨期）：stackid 等待栈聚合，见 docs/开发指南_场景5_锁竞争.md §七
 };
 
 #endif /* EVENTS_H */

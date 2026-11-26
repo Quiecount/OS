@@ -30,6 +30,9 @@ def main():
 
     counts = defaultdict(int)      # 场景 → 事件总数
     by_pid = defaultdict(int)      # (场景, pid) → 事件数
+    # 场景5 骨架级聚合：锁地址 → 等待统计（键名对齐接口契约 §4.2 LOCK_CONTENTION）
+    lock_stats = defaultdict(
+        lambda: {"count": 0, "wait_ns_total": 0, "wait_ns_max": 0, "waiters": set()})
 
     stream = sys.stdin if args.input == "-" else open(args.input, encoding="utf-8")
     for line in stream:
@@ -50,7 +53,16 @@ def main():
         #   cpu     → runqlat 分位数 / 每进程 CPU%       → CPU_HOG / SCHED_DELAY
         #   io      → 延迟 P50/P99（按进程/设备）        → IO_JITTER
         #   mem     → 缺页速率、大块 mmap、OOM 事件      → MEM_PRESSURE / OOM_KILL
-        #   lock    → 同 uaddr 等待线程数与累计时长      → LOCK_CONTENTION
+        #   lock    → 同 uaddr 等待线程数与累计时长      → LOCK_CONTENTION（下方已做骨架级聚合）
+
+        if scene == "lock":
+            st = lock_stats[evt.get("uaddr", "?")]
+            d = evt.get("duration_ns") or 0
+            st["count"] += 1
+            st["wait_ns_total"] += d
+            st["wait_ns_max"] = max(st["wait_ns_max"], d)
+            # 排队者是线程：优先用 tid 区分（同进程多线程 pid 相同）
+            st["waiters"].add(evt.get("tid", evt.get("pid")))
 
     # TODO(阶段3)：与正常负载基线对比 → 命中规则 → 组装七字段报告
     #   （异常类型/关联对象/关键指标/时间窗口/疑似根因/证据链/建议结论，
@@ -64,6 +76,18 @@ def main():
             f"{scene}/pid{pid}": n
             for (scene, pid), n in sorted(by_pid.items(), key=lambda x: -x[1])[:10]
         },
+        # 场景5：按累计等待时长取前 5 把最热的锁（无 lock 事件时为空数组）
+        "lock_top": [
+            {
+                "uaddr": uaddr,
+                "count": st["count"],
+                "wait_ns_total": st["wait_ns_total"],
+                "wait_ns_max": st["wait_ns_max"],
+                "waiter_count": len(st["waiters"]),
+            }
+            for uaddr, st in sorted(lock_stats.items(),
+                                    key=lambda kv: -kv[1]["wait_ns_total"])[:5]
+        ],
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

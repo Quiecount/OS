@@ -25,7 +25,7 @@ docs/          # 项目文档：选题分析 / 开发计划 / 系统设计 / 环
 src/           # 探针（probes/：execsnoop 完整 + 5 场景骨架）+ 加载器（loader/）+ 事件契约（events.h）；vmlinux.h 由 make 自动生成、不入库
 analysis/      # Python：聚合、基线、规则诊断引擎（骨架 collector.py，阶段 3 完成规则引擎）
 report/        # Python：LLM 报告层（阶段 4 建，必须带 --no-llm 降级开关）
-faults/        # 五场景故障注入：01-05 脚本 + syscall_bomb.c / lock_contention.c
+faults/        # 五场景故障注入：01-05 脚本 + syscall_bomb.c / lock_bomb.c
 tests/         # test.sh 一键回归（阶段 3 接入自动判定）
 deploy.sh      # 一键部署（装依赖 + make）
 test.sh        # 一键测试入口（转调 tests/test.sh）
